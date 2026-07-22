@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Daily Log</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <section id="log" class="log" hidden>
+        <table class="log-table" aria-label="Daily activity log">
+          <thead>
+            <tr>
+              <th id="date-cell" scope="col"></th>
+              <th id="sol-cell" scope="col"></th>
+              <th id="total-time-header" scope="col">Total time</th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </section>
+
+      <form id="composer" class="composer" autocomplete="off">
+        <label class="sr-only" for="category">Category</label>
+        <select id="category" class="composer-category" name="category" required>
+          <option value="Drafts to Drive">Drafts to Drive</option>
+          <option value="Programming • Figma • CAD">Programming • Figma • CAD</option>
+          <option value="School">School</option>
+          <option value="Reading">Reading</option>
+          <option value="TDs">TDs</option>
+        </select>
+
+        <label class="sr-only" for="duration">Duration</label>
+        <input
+          id="duration"
+          class="composer-input"
+          name="duration"
+          type="text"
+          placeholder="1 13 · 45m · 1h 30m"
+          required
+        />
+
+        <button class="composer-submit" type="submit" aria-label="Submit">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <path
+              fill="currentColor"
+              d="M3.4 20.4 20.85 12 3.4 3.6v6.55L13.75 12 3.4 13.85v6.55Z"
+            />
+          </svg>
+        </button>
+      </form>
+    </main>
+
+    <script src="script.js"></script>
+  </body>
+</html>
