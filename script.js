@@ -9,9 +9,11 @@ const CATEGORIES = [
 const SOL_EPOCH = { month: 4, day: 22 }; // May 22 (0-indexed month)
 const STORAGE_KEY = "habit-tracker-mvp:rows";
 const BOOKS_STORAGE_KEY = "habit-tracker-mvp:reading-books";
+const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 const state = {
-  rows: [],
+  days: {},
+  dragDayKey: null,
   dragIndex: null,
   books: {
     activeBookId: null,
@@ -20,10 +22,6 @@ const state = {
 };
 
 const logEl = document.getElementById("log");
-const rowsEl = document.getElementById("rows");
-const dateCell = document.getElementById("date-cell");
-const solCell = document.getElementById("sol-cell");
-const totalTimeHeader = document.getElementById("total-time-header");
 const form = document.getElementById("composer");
 const categorySelect = document.getElementById("category");
 const durationInput = document.getElementById("duration");
@@ -41,13 +39,95 @@ const bookDialogTitle = document.getElementById("book-dialog-title");
 const bookTotalPagesInput = document.getElementById("book-total-pages");
 
 let timestampPopupEl = null;
+let contextMenuEl = null;
 let bookDialogMode = "new"; // "new" | "edit"
+let noteEditingKey = null; // "YYYY-MM-DD:rowIndex:entryIndex"
+let noteDraft = "";
+let noteHadSavedText = false;
+let noteEditorDiscarding = false;
+let dateEditingKey = null; // "YYYY-MM-DD"
+let dateDraft = "";
+let dateEditorDiscarding = false;
+let activeDayKey = null;
 
 function formatDate(date) {
   const m = date.getMonth() + 1;
   const d = date.getDate();
   const y = String(date.getFullYear()).slice(-2);
   return `${m}.${d}.${y}`;
+}
+
+/** Local calendar day key: YYYY-MM-DD */
+function localDayKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function dateFromDayKey(dayKey) {
+  const [y, m, d] = dayKey.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+
+/**
+ * Parse display dates into a local day key.
+ * Accepts 7.22.26 · 7/22/2026 · 2026-07-22
+ */
+function parseDisplayDate(raw) {
+  if (typeof raw !== "string") return null;
+  const text = raw.trim();
+  if (!text) return null;
+
+  const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (iso) {
+    return dayKeyFromParts(Number(iso[1]), Number(iso[2]), Number(iso[3]));
+  }
+
+  const dotted = text.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2}|\d{4})$/);
+  if (!dotted) return null;
+
+  const month = Number(dotted[1]);
+  const day = Number(dotted[2]);
+  let year = Number(dotted[3]);
+  if (dotted[3].length === 2) year += 2000;
+  return dayKeyFromParts(year, month, day);
+}
+
+function dayKeyFromParts(year, month, day) {
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    year < 2000 ||
+    year > 2100 ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31
+  ) {
+    return null;
+  }
+  const date = new Date(year, month - 1, day);
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+  return localDayKey(date);
+}
+
+function sortedDayKeys(days = state.days) {
+  return Object.keys(days)
+    .filter((key) => DAY_KEY_RE.test(key) && Array.isArray(days[key]) && days[key].length > 0)
+    .sort();
+}
+
+function rowsFor(dayKey) {
+  if (!state.days[dayKey]) state.days[dayKey] = [];
+  return state.days[dayKey];
 }
 
 function daysSinceMay22(date = new Date()) {
@@ -331,15 +411,8 @@ function prefillPageFrom() {
 
 // --- Rows / durations ---
 
-function ensureHeader() {
-  const now = new Date();
-  dateCell.textContent = formatDate(now);
-  solCell.textContent = `Sol ${daysSinceMay22(now)}`;
-  if (totalTimeHeader) totalTimeHeader.textContent = "Total time";
-}
-
-function findRowIndex(category) {
-  return state.rows.findIndex((row) => row.category === category);
+function findRowIndex(dayKey, category) {
+  return rowsFor(dayKey).findIndex((row) => row.category === category);
 }
 
 function normalizeDuration(entry, category) {
@@ -371,6 +444,11 @@ function normalizeDuration(entry, category) {
     }
   }
 
+  if (typeof entry.comment === "string") {
+    const comment = entry.comment.trim();
+    if (comment) normalized.comment = comment;
+  }
+
   return normalized;
 }
 
@@ -392,27 +470,110 @@ function normalizeRow(row) {
   };
 }
 
-function loadRows() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.map(normalizeRow).filter(Boolean);
-  } catch {
-    return [];
+function normalizeDayRows(rows) {
+  if (!Array.isArray(rows)) return [];
+  return rows.map(normalizeRow).filter(Boolean);
+}
+
+/** Split legacy flat rows across days using each entry's loggedAt. */
+function migrateFlatRows(rows) {
+  const days = {};
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    const category = typeof row.category === "string" ? row.category.trim() : "";
+    if (!category || !Array.isArray(row.durations)) continue;
+
+    for (const entry of row.durations) {
+      const normalized = normalizeDuration(entry, category);
+      if (!normalized) continue;
+      const dayKey = localDayKey(new Date(normalized.loggedAt));
+      if (!days[dayKey]) days[dayKey] = [];
+      let target = days[dayKey].find((r) => r.category === category);
+      if (!target) {
+        target = {
+          id: typeof row.id === "string" && row.id ? row.id : crypto.randomUUID(),
+          category,
+          durations: [],
+        };
+        days[dayKey].push(target);
+      }
+      target.durations.push(normalized);
+    }
+  }
+  return days;
+}
+
+function mergeDayRows(targetRows, sourceRows) {
+  for (const source of sourceRows) {
+    const index = targetRows.findIndex((row) => row.category === source.category);
+    if (index === -1) {
+      targetRows.push(source);
+      continue;
+    }
+    targetRows[index].durations.push(...source.durations);
   }
 }
 
-function saveRows() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.rows));
+function renameDay(fromKey, toKey) {
+  if (!DAY_KEY_RE.test(fromKey) || !DAY_KEY_RE.test(toKey)) return false;
+  if (fromKey === toKey) return false;
+  if (!Array.isArray(state.days[fromKey])) return false;
+
+  const moving = state.days[fromKey];
+  delete state.days[fromKey];
+
+  if (Array.isArray(state.days[toKey]) && state.days[toKey].length > 0) {
+    mergeDayRows(state.days[toKey], moving);
+  } else {
+    state.days[toKey] = moving;
+  }
+
+  if (noteEditingKey?.startsWith(`${fromKey}:`)) {
+    noteEditingKey = `${toKey}:${noteEditingKey.slice(fromKey.length + 1)}`;
+  }
+  return true;
+}
+
+function loadDays() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+
+    // Legacy flat array → bucket by each entry's loggedAt calendar day
+    if (Array.isArray(parsed)) {
+      return migrateFlatRows(parsed);
+    }
+
+    if (!parsed || typeof parsed !== "object") return {};
+
+    const days = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (!DAY_KEY_RE.test(key)) continue;
+      const rows = normalizeDayRows(value);
+      if (rows.length > 0) days[key] = rows;
+    }
+    return days;
+  } catch {
+    return {};
+  }
+}
+
+function saveDays() {
+  const toSave = {};
+  for (const key of sortedDayKeys(state.days)) {
+    toSave[key] = state.days[key];
+  }
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
 }
 
 function upsertDuration(category, entry) {
-  const index = findRowIndex(category);
+  const dayKey = localDayKey();
+  const rows = rowsFor(dayKey);
+  const index = findRowIndex(dayKey, category);
 
   if (index === -1) {
-    state.rows.push({
+    rows.push({
       id: crypto.randomUUID(),
       category,
       durations: [entry],
@@ -420,7 +581,7 @@ function upsertDuration(category, entry) {
     return;
   }
 
-  state.rows[index].durations.push(entry);
+  rows[index].durations.push(entry);
 }
 
 function runningTotals(durations) {
@@ -442,7 +603,139 @@ function formatEntryLabel(row, entry) {
   return formatDuration(entry.minutes);
 }
 
-// --- Timestamp popup ---
+function syncActiveDay() {
+  const today = localDayKey();
+  if (activeDayKey === today) return false;
+  activeDayKey = today;
+  return true;
+}
+
+// --- Date header editing ---
+
+function clearDateEditorState() {
+  dateEditingKey = null;
+  dateDraft = "";
+  dateEditorDiscarding = false;
+}
+
+function openDateEditor(dayKey) {
+  if (!state.days[dayKey]) return;
+  closeContextMenu();
+  hideTimestampPopup();
+  if (noteEditingKey) clearNoteEditorState();
+  dateEditingKey = dayKey;
+  dateDraft = formatDate(dateFromDayKey(dayKey));
+  dateEditorDiscarding = false;
+  renderRows();
+}
+
+function cancelDateEditor() {
+  clearDateEditorState();
+  renderRows();
+}
+
+function commitDateEditor(dayKey) {
+  const nextKey = parseDisplayDate(dateDraft);
+  if (!nextKey) {
+    const input = logEl.querySelector(`.day-date-input[data-day="${dayKey}"]`);
+    if (input) {
+      input.setCustomValidity("Use a date like 7.22.26");
+      input.reportValidity();
+      input.focus();
+    }
+    return;
+  }
+
+  clearDateEditorState();
+  if (nextKey !== dayKey) {
+    renameDay(dayKey, nextKey);
+  }
+  renderRows();
+}
+
+function mountDateEditor() {
+  if (!dateEditingKey || !state.days[dateEditingKey]) {
+    if (dateEditingKey) clearDateEditorState();
+    return;
+  }
+
+  const cell = logEl.querySelector(`.day-date-cell[data-day="${dateEditingKey}"]`);
+  if (!cell) return;
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "day-date-input";
+  input.dataset.day = dateEditingKey;
+  input.value = dateDraft;
+  input.setAttribute("aria-label", "Edit date");
+  input.autocomplete = "off";
+  input.spellcheck = false;
+
+  input.addEventListener("input", (event) => {
+    dateDraft = event.target.value;
+    input.setCustomValidity("");
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commitDateEditor(dateEditingKey);
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      cancelDateEditor();
+    }
+  });
+  input.addEventListener("blur", () => {
+    queueMicrotask(() => {
+      if (dateEditingKey !== input.dataset.day) return;
+      if (dateEditorDiscarding) return;
+      commitDateEditor(dateEditingKey);
+    });
+  });
+
+  cell.replaceChildren(input);
+  queueMicrotask(() => {
+    input.focus();
+    input.select();
+  });
+}
+
+function bindDateEditors() {
+  logEl.querySelectorAll(".day-date-btn").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const dayKey = button.dataset.day;
+      if (!dayKey) return;
+      openDateEditor(dayKey);
+    });
+  });
+}
+
+// --- Timestamp popup / context menu / notes ---
+
+function entryKey(dayKey, rowIndex, entryIndex) {
+  return `${dayKey}:${rowIndex}:${entryIndex}`;
+}
+
+function parseEntryKey(key) {
+  if (typeof key !== "string") return null;
+  const match = key.match(/^(\d{4}-\d{2}-\d{2}):(\d+):(\d+)$/);
+  if (!match) return null;
+  const rowIndex = Number(match[2]);
+  const entryIndex = Number(match[3]);
+  if (!Number.isInteger(rowIndex) || !Number.isInteger(entryIndex)) return null;
+  return { dayKey: match[1], rowIndex, entryIndex };
+}
+
+function getEntry(dayKey, rowIndex, entryIndex) {
+  const rows = state.days[dayKey];
+  if (!rows) return null;
+  const row = rows[rowIndex];
+  if (!row) return null;
+  const entry = row.durations[entryIndex];
+  return entry || null;
+}
 
 function hideTimestampPopup() {
   if (timestampPopupEl) {
@@ -482,15 +775,261 @@ function showTimestampPopup(clientX, clientY, loggedAt) {
   timestampPopupEl = popup;
 }
 
+function closeContextMenu() {
+  if (contextMenuEl) {
+    contextMenuEl.remove();
+    contextMenuEl = null;
+  }
+}
+
+function setEntryComment(dayKey, rowIndex, entryIndex, text) {
+  const entry = getEntry(dayKey, rowIndex, entryIndex);
+  if (!entry) return;
+  const trimmed = text.trim();
+  if (trimmed) {
+    entry.comment = trimmed;
+  } else {
+    delete entry.comment;
+  }
+}
+
+function clearNoteEditorState() {
+  noteEditingKey = null;
+  noteDraft = "";
+  noteHadSavedText = false;
+  noteEditorDiscarding = false;
+}
+
+function openNoteEditor(dayKey, rowIndex, entryIndex) {
+  const entry = getEntry(dayKey, rowIndex, entryIndex);
+  if (!entry) return;
+  closeContextMenu();
+  hideTimestampPopup();
+  noteEditingKey = entryKey(dayKey, rowIndex, entryIndex);
+  noteDraft = entry.comment || "";
+  noteHadSavedText = Boolean(entry.comment);
+  noteEditorDiscarding = false;
+  renderRows();
+}
+
+function commitNoteEditor(dayKey, rowIndex, entryIndex) {
+  const trimmed = noteDraft.trim();
+  if (!trimmed) {
+    if (noteHadSavedText) {
+      deleteEntryComment(dayKey, rowIndex, entryIndex);
+    } else {
+      cancelNoteEditor();
+    }
+    return;
+  }
+  setEntryComment(dayKey, rowIndex, entryIndex, noteDraft);
+  clearNoteEditorState();
+  renderRows();
+}
+
+function cancelNoteEditor() {
+  clearNoteEditorState();
+  renderRows();
+}
+
+function deleteEntryComment(dayKey, rowIndex, entryIndex) {
+  const key = entryKey(dayKey, rowIndex, entryIndex);
+  if (noteEditingKey === key) {
+    clearNoteEditorState();
+  }
+  setEntryComment(dayKey, rowIndex, entryIndex, "");
+  renderRows();
+}
+
+function createMenuButton(label, { danger = false, onClick } = {}) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = danger ? "btn-action btn-action-danger" : "btn-action";
+  btn.textContent = label;
+  btn.setAttribute("role", "menuitem");
+  btn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    closeContextMenu();
+    onClick?.();
+  });
+  return btn;
+}
+
+function openDurationMenu(dayKey, rowIndex, entryIndex, clientX, clientY, mode) {
+  closeContextMenu();
+  hideTimestampPopup();
+
+  const entry = getEntry(dayKey, rowIndex, entryIndex);
+  if (!entry) return;
+
+  const menu = document.createElement("div");
+  menu.className = "context-menu";
+  menu.setAttribute("role", "menu");
+
+  const hasComment = Boolean(entry.comment);
+
+  if (mode === "context" && hasComment) {
+    menu.append(
+      createMenuButton("Edit", {
+        onClick: () => openNoteEditor(dayKey, rowIndex, entryIndex),
+      }),
+      createMenuButton("Delete", {
+        danger: true,
+        onClick: () => deleteEntryComment(dayKey, rowIndex, entryIndex),
+      }),
+    );
+  } else {
+    menu.append(
+      createMenuButton("Note", {
+        onClick: () => openNoteEditor(dayKey, rowIndex, entryIndex),
+      }),
+    );
+  }
+
+  document.body.append(menu);
+  contextMenuEl = menu;
+
+  const { offsetWidth, offsetHeight } = menu;
+  const x = Math.min(clientX, window.innerWidth - offsetWidth - 8);
+  const y = Math.min(clientY, window.innerHeight - offsetHeight - 8);
+  menu.style.left = `${Math.max(8, x)}px`;
+  menu.style.top = `${Math.max(8, y)}px`;
+}
+
+function renderNoteComposer(dayKey, rowIndex, entryIndex) {
+  const wrap = document.createElement("div");
+  wrap.className = "duration-note-composer";
+
+  const input = document.createElement("textarea");
+  input.className = "duration-note-input";
+  input.rows = 2;
+  input.value = noteDraft;
+  input.placeholder = "What did you work on?";
+  input.setAttribute("aria-label", "Note");
+  input.addEventListener("input", (event) => {
+    noteDraft = event.target.value;
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      commitNoteEditor(dayKey, rowIndex, entryIndex);
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      cancelNoteEditor();
+    }
+  });
+  input.addEventListener("blur", () => {
+    queueMicrotask(() => {
+      if (noteEditingKey !== entryKey(dayKey, rowIndex, entryIndex)) return;
+      if (noteEditorDiscarding) return;
+      if (wrap.contains(document.activeElement)) return;
+      cancelNoteEditor();
+    });
+  });
+
+  const actions = document.createElement("div");
+  actions.className = "duration-note-actions";
+
+  const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
+  cancelBtn.className = "btn-note";
+  cancelBtn.textContent = "Cancel";
+  cancelBtn.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+    noteEditorDiscarding = true;
+  });
+  cancelBtn.addEventListener("click", () => {
+    cancelNoteEditor();
+  });
+
+  const submitBtn = document.createElement("button");
+  submitBtn.type = "button";
+  submitBtn.className = "btn-note btn-note-submit";
+  submitBtn.textContent = "Submit";
+  submitBtn.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+  });
+  submitBtn.addEventListener("click", () => {
+    commitNoteEditor(dayKey, rowIndex, entryIndex);
+  });
+
+  actions.append(cancelBtn, submitBtn);
+  wrap.append(input, actions);
+  queueMicrotask(() => {
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  });
+  return wrap;
+}
+
+function syncEntryHeights() {
+  logEl.querySelectorAll(".log-row").forEach((row) => {
+    const durationWraps = row.querySelectorAll(".duration-entry-wrap");
+    const totalWraps = row.querySelectorAll(".total-entry-wrap");
+    durationWraps.forEach((durationWrap, i) => {
+      const totalWrap = totalWraps[i];
+      if (!totalWrap) return;
+      durationWrap.style.minHeight = "";
+      totalWrap.style.minHeight = "";
+      const height = Math.max(durationWrap.offsetHeight, totalWrap.offsetHeight);
+      durationWrap.style.minHeight = `${height}px`;
+      totalWrap.style.minHeight = `${height}px`;
+    });
+  });
+}
+
 function onDurationClick(event) {
   event.preventDefault();
   event.stopPropagation();
 
   const button = event.currentTarget;
+  const dayKey = button.dataset.day;
+  const rowIndex = Number(button.dataset.row);
+  const entryIndex = Number(button.dataset.entry);
+  if (!dayKey || !Number.isInteger(rowIndex) || !Number.isInteger(entryIndex)) return;
+
+  openDurationMenu(dayKey, rowIndex, entryIndex, event.clientX, event.clientY, "click");
+}
+
+function onDurationContextMenu(event) {
+  event.preventDefault();
+  event.stopPropagation();
+
+  const button = event.currentTarget;
+  const dayKey = button.dataset.day;
+  const rowIndex = Number(button.dataset.row);
+  const entryIndex = Number(button.dataset.entry);
+  if (!dayKey || !Number.isInteger(rowIndex) || !Number.isInteger(entryIndex)) return;
+
+  const entry = getEntry(dayKey, rowIndex, entryIndex);
+  if (!entry?.comment) {
+    openDurationMenu(dayKey, rowIndex, entryIndex, event.clientX, event.clientY, "click");
+    return;
+  }
+
+  openDurationMenu(dayKey, rowIndex, entryIndex, event.clientX, event.clientY, "context");
+}
+
+function onDurationMouseEnter(event) {
+  if (contextMenuEl || noteEditingKey) return;
+  const button = event.currentTarget;
   const loggedAt = button.dataset.loggedAt;
   if (!loggedAt) return;
-
   showTimestampPopup(event.clientX, event.clientY, loggedAt);
+}
+
+function onDurationMouseMove(event) {
+  if (contextMenuEl || noteEditingKey) return;
+  if (!timestampPopupEl) return;
+  const button = event.currentTarget;
+  const loggedAt = button.dataset.loggedAt;
+  if (!loggedAt) return;
+  showTimestampPopup(event.clientX, event.clientY, loggedAt);
+}
+
+function onDurationMouseLeave() {
+  hideTimestampPopup();
 }
 
 // --- Composer / Reading UI ---
@@ -590,35 +1129,42 @@ function onPageToInput() {
   pageToInput.value = digitsOnly(pageToInput.value);
 }
 
-function renderRows() {
-  ensureHeader();
-  hideTimestampPopup();
-  saveRows();
+function renderDayTable(dayKey, rows) {
+  const dayDate = dateFromDayKey(dayKey);
+  const dateLabel = formatDate(dayDate);
+  const solLabel = `Sol ${daysSinceMay22(dayDate)}`;
 
-  if (state.rows.length === 0) {
-    logEl.hidden = true;
-    rowsEl.innerHTML = "";
-    return;
-  }
-
-  logEl.hidden = false;
-  rowsEl.innerHTML = state.rows
+  const bodyHtml = rows
     .map((row, index) => {
       const totals = runningTotals(row.durations);
-      const durationLines = row.durations
-        .map(
-          (entry, i) =>
-            `<button type="button" class="duration-entry" data-row="${index}" data-entry="${i}" data-logged-at="${escapeHtml(entry.loggedAt)}">${escapeHtml(formatEntryLabel(row, entry))}</button>`,
-        )
+      const durationBlocks = row.durations
+        .map((entry, i) => {
+          const key = entryKey(dayKey, index, i);
+          const isEditing = noteEditingKey === key;
+          const noteHtml =
+            !isEditing && entry.comment
+              ? `<div class="duration-note">${escapeHtml(entry.comment)}</div>`
+              : "";
+          return `
+            <div class="duration-entry-wrap" data-day="${dayKey}" data-row="${index}" data-entry="${i}">
+              <button type="button" class="duration-entry" data-day="${dayKey}" data-row="${index}" data-entry="${i}" data-logged-at="${escapeHtml(entry.loggedAt)}">${escapeHtml(formatEntryLabel(row, entry))}</button>
+              ${noteHtml}
+            </div>
+          `;
+        })
         .join("");
-      const totalLines = totals
-        .map((total) => `<div class="total-line">${escapeHtml(formatDuration(total))}</div>`)
+      const totalBlocks = totals
+        .map(
+          (total) =>
+            `<div class="total-entry-wrap"><div class="total-line">${escapeHtml(formatDuration(total))}</div></div>`,
+        )
         .join("");
 
       return `
         <tr
           class="log-row"
           draggable="true"
+          data-day="${dayKey}"
           data-index="${index}"
         >
           <td>
@@ -628,30 +1174,101 @@ function renderRows() {
             </div>
           </td>
           <td>
-            <div class="duration-lines">${durationLines}</div>
+            <div class="duration-lines">${durationBlocks}</div>
           </td>
           <td>
-            <div class="total-lines">${totalLines}</div>
+            <div class="total-lines">${totalBlocks}</div>
           </td>
         </tr>
       `;
     })
     .join("");
 
-  bindDragHandlers();
-  bindDurationClicks();
+  return `
+    <table class="log-table" data-day="${dayKey}" aria-label="Daily activity log for ${escapeHtml(dateLabel)}">
+      <thead>
+        <tr>
+          <th scope="col" class="day-date-cell" data-day="${dayKey}">
+            <button type="button" class="day-date-btn" data-day="${dayKey}" title="Edit date">${escapeHtml(dateLabel)}</button>
+          </th>
+          <th scope="col">${escapeHtml(solLabel)}</th>
+          <th scope="col">Total time</th>
+        </tr>
+      </thead>
+      <tbody>${bodyHtml}</tbody>
+    </table>
+  `;
 }
 
-function bindDurationClicks() {
-  rowsEl.querySelectorAll(".duration-entry").forEach((button) => {
+function renderRows() {
+  syncActiveDay();
+  hideTimestampPopup();
+  closeContextMenu();
+  saveDays();
+
+  const dayKeys = sortedDayKeys();
+
+  if (dayKeys.length === 0) {
+    logEl.hidden = true;
+    logEl.innerHTML = "";
+    return;
+  }
+
+  logEl.hidden = false;
+  logEl.innerHTML = dayKeys.map((key) => renderDayTable(key, state.days[key])).join("");
+
+  bindDragHandlers();
+  bindDurationInteractions();
+  bindDateEditors();
+  mountDateEditor();
+  mountNoteComposer();
+  syncEntryHeights();
+}
+
+function mountNoteComposer() {
+  const parsed = parseEntryKey(noteEditingKey);
+  if (!parsed) return;
+  const { dayKey, rowIndex, entryIndex } = parsed;
+  if (!getEntry(dayKey, rowIndex, entryIndex)) {
+    clearNoteEditorState();
+    return;
+  }
+
+  const wrap = logEl.querySelector(
+    `.duration-entry-wrap[data-day="${dayKey}"][data-row="${rowIndex}"][data-entry="${entryIndex}"]`,
+  );
+  if (!wrap) return;
+  wrap.append(renderNoteComposer(dayKey, rowIndex, entryIndex));
+}
+
+function bindDurationInteractions() {
+  logEl.querySelectorAll(".duration-entry").forEach((button) => {
     button.addEventListener("click", onDurationClick);
+    button.addEventListener("contextmenu", onDurationContextMenu);
+    button.addEventListener("mouseenter", onDurationMouseEnter);
+    button.addEventListener("mousemove", onDurationMouseMove);
+    button.addEventListener("mouseleave", onDurationMouseLeave);
     button.addEventListener("mousedown", (event) => event.stopPropagation());
     button.addEventListener("dragstart", (event) => event.preventDefault());
+  });
+
+  logEl.querySelectorAll(".duration-note").forEach((noteEl) => {
+    const wrap = noteEl.closest(".duration-entry-wrap");
+    if (!wrap) return;
+    const dayKey = wrap.dataset.day;
+    const rowIndex = Number(wrap.dataset.row);
+    const entryIndex = Number(wrap.dataset.entry);
+    noteEl.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openDurationMenu(dayKey, rowIndex, entryIndex, event.clientX, event.clientY, "context");
+    });
+    noteEl.addEventListener("mousedown", (event) => event.stopPropagation());
   });
 }
 
 function bindDragHandlers() {
-  const rowNodes = rowsEl.querySelectorAll(".log-row");
+  const rowNodes = logEl.querySelectorAll(".log-row");
 
   rowNodes.forEach((row) => {
     row.addEventListener("dragstart", onDragStart);
@@ -663,22 +1280,29 @@ function bindDragHandlers() {
 }
 
 function onDragStart(event) {
-  if (event.target.closest(".duration-entry")) {
+  if (
+    event.target.closest(".duration-entry") ||
+    event.target.closest(".duration-note-composer") ||
+    event.target.closest(".duration-note")
+  ) {
     event.preventDefault();
     return;
   }
+  const dayKey = event.currentTarget.dataset.day;
   const index = Number(event.currentTarget.dataset.index);
+  state.dragDayKey = dayKey;
   state.dragIndex = index;
   event.currentTarget.classList.add("is-dragging");
   event.dataTransfer.effectAllowed = "move";
-  event.dataTransfer.setData("text/plain", String(index));
+  event.dataTransfer.setData("text/plain", `${dayKey}:${index}`);
 }
 
 function onDragEnd(event) {
   event.currentTarget.classList.remove("is-dragging");
-  rowsEl
+  logEl
     .querySelectorAll(".is-drag-over")
     .forEach((el) => el.classList.remove("is-drag-over"));
+  state.dragDayKey = null;
   state.dragIndex = null;
 }
 
@@ -694,17 +1318,26 @@ function onDragLeave(event) {
 
 function onDrop(event) {
   event.preventDefault();
+  const dayKey = event.currentTarget.dataset.day;
   const toIndex = Number(event.currentTarget.dataset.index);
   const fromIndex = state.dragIndex;
+  const fromDay = state.dragDayKey;
 
   event.currentTarget.classList.remove("is-drag-over");
 
-  if (fromIndex === null || Number.isNaN(toIndex) || fromIndex === toIndex) {
+  if (
+    !dayKey ||
+    fromDay !== dayKey ||
+    fromIndex === null ||
+    Number.isNaN(toIndex) ||
+    fromIndex === toIndex
+  ) {
     return;
   }
 
-  const [moved] = state.rows.splice(fromIndex, 1);
-  state.rows.splice(toIndex, 0, moved);
+  const rows = rowsFor(dayKey);
+  const [moved] = rows.splice(fromIndex, 1);
+  rows.splice(toIndex, 0, moved);
   renderRows();
 }
 
@@ -868,6 +1501,9 @@ document.getElementById("book-dialog-cancel").addEventListener("click", () => {
 });
 
 document.addEventListener("click", (event) => {
+  if (contextMenuEl && !contextMenuEl.contains(event.target)) {
+    closeContextMenu();
+  }
   if (!timestampPopupEl) return;
   if (event.target.closest(".duration-entry")) return;
   if (event.target.closest(".timestamp-popup")) return;
@@ -875,14 +1511,44 @@ document.addEventListener("click", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") hideTimestampPopup();
+  if (event.key === "Escape") {
+    closeContextMenu();
+    hideTimestampPopup();
+    if (dateEditingKey) {
+      dateEditorDiscarding = true;
+      cancelDateEditor();
+    }
+  }
 });
 
-state.rows = loadRows();
+window.addEventListener("scroll", () => {
+  closeContextMenu();
+  hideTimestampPopup();
+}, true);
+
+window.addEventListener("resize", () => {
+  closeContextMenu();
+  hideTimestampPopup();
+  syncEntryHeights();
+});
+
+state.days = loadDays();
 state.books = loadBooks();
+activeDayKey = localDayKey();
+saveDays(); // persist migration from legacy flat array if needed
 renderRows();
 updateComposerMode();
 if (isReadingCategory() && getActiveBook()) {
   prefillPageFrom();
 }
 durationInput.focus();
+
+function onPossibleDayChange() {
+  if (!syncActiveDay()) return;
+  renderRows();
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") onPossibleDayChange();
+});
+window.addEventListener("focus", onPossibleDayChange);
