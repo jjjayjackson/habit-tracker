@@ -9,7 +9,10 @@ const CATEGORIES = [
 const SOL_EPOCH = { month: 4, day: 22 }; // May 22 (0-indexed month)
 const STORAGE_KEY = "habit-tracker-mvp:rows";
 const BOOKS_STORAGE_KEY = "habit-tracker-mvp:reading-books";
+const STOPWATCHES_STORAGE_KEY = "habit-tracker-mvp:stopwatches";
 const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
+/** Open next-book URL once when finished pages ÷ total ≥ this (0.8 = 80%). */
+const NEXT_BOOK_OPEN_THRESHOLD = 0.8;
 
 const state = {
   days: {},
@@ -18,6 +21,9 @@ const state = {
   books: {
     activeBookId: null,
     books: [],
+    nextBookUrl: "",
+    openThreshold: NEXT_BOOK_OPEN_THRESHOLD,
+    thresholdHistory: [],
   },
 };
 
@@ -365,12 +371,43 @@ function normalizeBook(book) {
     totalPages,
     lastFinishedPage,
     status,
+    purchaseOpened: book.purchaseOpened === true,
   };
+}
+
+function emptyBooksState() {
+  return {
+    activeBookId: null,
+    books: [],
+    nextBookUrl: "",
+    openThreshold: NEXT_BOOK_OPEN_THRESHOLD,
+    thresholdHistory: [],
+  };
+}
+
+function normalizeOpenThreshold(value) {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n) || n <= 0 || n > 1) return NEXT_BOOK_OPEN_THRESHOLD;
+  return n;
+}
+
+function normalizeThresholdHistory(raw) {
+  if (!Array.isArray(raw)) return [];
+  const entries = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const percent = Number(item.percent);
+    const at = typeof item.at === "string" ? item.at : "";
+    if (!Number.isInteger(percent) || percent < 1 || percent > 100) continue;
+    if (!at) continue;
+    entries.push({ at, percent });
+  }
+  return entries.slice(-3);
 }
 
 function normalizeBooksState(raw) {
   if (!raw || typeof raw !== "object") {
-    return { activeBookId: null, books: [] };
+    return emptyBooksState();
   }
   const books = Array.isArray(raw.books)
     ? raw.books.map(normalizeBook).filter(Boolean)
@@ -386,16 +423,24 @@ function normalizeBooksState(raw) {
     const active = books.find((b) => b.status === "active");
     activeBookId = active ? active.id : null;
   }
-  return { activeBookId, books };
+  const nextBookUrl =
+    typeof raw.nextBookUrl === "string" ? raw.nextBookUrl.trim() : "";
+  return {
+    activeBookId,
+    books,
+    nextBookUrl,
+    openThreshold: normalizeOpenThreshold(raw.openThreshold),
+    thresholdHistory: normalizeThresholdHistory(raw.thresholdHistory),
+  };
 }
 
 function loadBooks() {
   try {
     const raw = localStorage.getItem(BOOKS_STORAGE_KEY);
-    if (!raw) return { activeBookId: null, books: [] };
+    if (!raw) return emptyBooksState();
     return normalizeBooksState(JSON.parse(raw));
   } catch {
-    return { activeBookId: null, books: [] };
+    return emptyBooksState();
   }
 }
 
@@ -415,6 +460,7 @@ function createBook(totalPages) {
     totalPages,
     lastFinishedPage: 0,
     status: "active",
+    purchaseOpened: false,
   };
   for (const existing of state.books.books) {
     if (existing.status === "active") existing.status = "finished";
@@ -433,7 +479,35 @@ function updateActiveBookTotal(totalPages) {
     book.lastFinishedPage = totalPages;
   }
   saveBooks();
+  maybeOpenNextBookPurchase(book);
   return book;
+}
+
+function bookProgress(book) {
+  if (!book || !(book.totalPages > 0)) return 0;
+  return book.lastFinishedPage / book.totalPages;
+}
+
+/**
+ * First automation: when progress crosses the threshold, open the saved
+ * next-book URL once, then clear it so you pick the following book yourself.
+ */
+function maybeOpenNextBookPurchase(book) {
+  if (!book || book.purchaseOpened) return;
+  if (bookProgress(book) < state.books.openThreshold) return;
+
+  const url = typeof state.books.nextBookUrl === "string"
+    ? state.books.nextBookUrl.trim()
+    : "";
+  if (!url) return;
+
+  const win = window.open(url, "_blank", "noopener,noreferrer");
+  if (!win) return;
+
+  book.purchaseOpened = true;
+  state.books.nextBookUrl = "";
+  saveBooks();
+  syncNextBookUrlInput();
 }
 
 function updateActiveBookBookmark(pageTo) {
@@ -444,6 +518,7 @@ function updateActiveBookBookmark(pageTo) {
     book.lastFinishedPage = book.totalPages;
   }
   saveBooks();
+  maybeOpenNextBookPurchase(book);
 }
 
 function maxFinishedPageForBook(bookId) {
@@ -1620,8 +1695,9 @@ function onBookDialogSubmit(event) {
     const sw = stopwatches[pendingReadingTransferId];
     pendingReadingTransferId = null;
     if (sw) {
-      setStopwatchSidebarOpen(true);
-      document.body.classList.add("stopwatch-edge-hot");
+      setSideRailOpen(true);
+      setActiveSideTab("timers");
+      document.body.classList.add("side-edge-hot");
       showReadingTransferFields(sw);
       return;
     }
@@ -1728,10 +1804,19 @@ document.addEventListener("visibilitychange", () => {
 });
 window.addEventListener("focus", onPossibleDayChange);
 
-/* —— Stopwatch sidebar —— */
-const stopwatchEdge = document.getElementById("stopwatch-edge");
-const stopwatchTab = document.getElementById("stopwatch-tab");
-const stopwatchSidebar = document.getElementById("stopwatch-sidebar");
+/* —— Right-edge tool rail + stopwatches —— */
+const sideEdge = document.getElementById("side-edge");
+const sideBookmark = document.getElementById("side-bookmark");
+const sideRail = document.getElementById("side-rail");
+const sideClose = document.getElementById("side-close");
+const sideTabs = document.querySelectorAll(".side-tab");
+const sidePanels = document.querySelectorAll(".side-panel");
+const timersPanel = document.getElementById("panel-timers");
+const nextBookUrlInput = document.getElementById("next-book-url");
+const nextBookPasteBtn = document.getElementById("next-book-paste");
+const openThresholdInput = document.getElementById("open-threshold-input");
+const openThresholdUpdateBtn = document.getElementById("open-threshold-update");
+const thresholdHistoryEl = document.getElementById("threshold-history");
 
 const stopwatches = [0, 1].map((id) => ({
   id,
@@ -1745,6 +1830,117 @@ const stopwatches = [0, 1].map((id) => ({
 /** Stopwatch waiting on a new book before showing Reading page fields. */
 let pendingReadingTransferId = null;
 
+function isSideRailOpen() {
+  return document.body.classList.contains("side-open");
+}
+
+function setSideRailOpen(open) {
+  document.body.classList.toggle("side-open", open);
+  sideRail.setAttribute("aria-hidden", open ? "false" : "true");
+  sideBookmark.setAttribute("aria-expanded", open ? "true" : "false");
+  sideBookmark.setAttribute("aria-label", open ? "Close tools" : "Open tools");
+  if (!open) {
+    closeTransferMenus();
+    hideStopwatchReadingFields();
+  }
+}
+
+function setActiveSideTab(tabId) {
+  for (const tab of sideTabs) {
+    const selected = tab.dataset.tab === tabId;
+    tab.setAttribute("aria-selected", selected ? "true" : "false");
+    tab.tabIndex = selected ? 0 : -1;
+  }
+  for (const panel of sidePanels) {
+    panel.hidden = panel.dataset.panel !== tabId;
+  }
+  if (tabId !== "timers") {
+    closeTransferMenus();
+    hideStopwatchReadingFields();
+  }
+}
+
+function syncNextBookUrlInput() {
+  if (!nextBookUrlInput) return;
+  nextBookUrlInput.value = state.books.nextBookUrl || "";
+}
+
+function syncOpenThresholdInput() {
+  if (!openThresholdInput) return;
+  const percent = Math.round((state.books.openThreshold || NEXT_BOOK_OPEN_THRESHOLD) * 100);
+  openThresholdInput.value = String(percent);
+}
+
+function formatThresholdHistoryAt(iso) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function renderThresholdHistory() {
+  if (!thresholdHistoryEl) return;
+  thresholdHistoryEl.replaceChildren();
+  const history = Array.isArray(state.books.thresholdHistory)
+    ? state.books.thresholdHistory
+    : [];
+  for (const entry of history) {
+    const li = document.createElement("li");
+    li.className = "threshold-history-item";
+    li.textContent = `${entry.percent}% · ${formatThresholdHistoryAt(entry.at)}`;
+    thresholdHistoryEl.append(li);
+  }
+}
+
+function updateOpenThresholdFromInput() {
+  if (!openThresholdInput) return;
+  const raw = digitsOnly(openThresholdInput.value);
+  openThresholdInput.value = raw;
+  const percent = Number(raw);
+  if (!Number.isInteger(percent) || percent < 1 || percent > 100) {
+    openThresholdInput.setCustomValidity("Enter a whole number from 1 to 100");
+    openThresholdInput.reportValidity();
+    return;
+  }
+  openThresholdInput.setCustomValidity("");
+
+  state.books.openThreshold = percent / 100;
+  const entry = { at: new Date().toISOString(), percent };
+  const prev = Array.isArray(state.books.thresholdHistory)
+    ? state.books.thresholdHistory
+    : [];
+  state.books.thresholdHistory = [...prev, entry].slice(-3);
+  saveBooks();
+  syncOpenThresholdInput();
+  renderThresholdHistory();
+}
+
+function saveNextBookUrlFromInput() {
+  if (!nextBookUrlInput) return;
+  state.books.nextBookUrl = nextBookUrlInput.value.trim();
+  saveBooks();
+}
+
+async function pasteNextBookUrl() {
+  if (!nextBookUrlInput) return;
+  try {
+    const text = await navigator.clipboard.readText();
+    nextBookUrlInput.value = text.trim();
+    saveNextBookUrlFromInput();
+    nextBookUrlInput.focus();
+    if (typeof nextBookUrlInput.select === "function") nextBookUrlInput.select();
+  } catch {
+    nextBookUrlInput.focus();
+    nextBookUrlInput.setCustomValidity("Couldn’t read clipboard — paste with ⌘V / Ctrl+V");
+    nextBookUrlInput.reportValidity();
+    nextBookUrlInput.setCustomValidity("");
+  }
+}
+
 function pad2(n) {
   return String(n).padStart(2, "0");
 }
@@ -1757,6 +1953,55 @@ function getStopwatchElapsed(sw) {
 /** Whole seconds for transfer (sub-minute allowed; still accumulates). */
 function getStopwatchTransferSeconds(sw) {
   return Math.floor(getStopwatchElapsed(sw) / 1000);
+}
+
+function saveStopwatches() {
+  const payload = stopwatches.map((sw) => ({
+    elapsedMs: sw.elapsedMs,
+    running: sw.running,
+    startedAt: sw.running ? sw.startedAt : null,
+  }));
+  localStorage.setItem(STOPWATCHES_STORAGE_KEY, JSON.stringify(payload));
+}
+
+function loadStopwatches() {
+  try {
+    const raw = localStorage.getItem(STOPWATCHES_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function tickStopwatch(sw) {
+  if (sw.intervalId != null) clearInterval(sw.intervalId);
+  sw.intervalId = setInterval(() => renderStopwatch(sw), 250);
+}
+
+function restoreStopwatches() {
+  const saved = loadStopwatches();
+  if (!saved) return;
+
+  for (const sw of stopwatches) {
+    const entry = saved[sw.id];
+    if (!entry || typeof entry !== "object") continue;
+
+    const elapsedMs = Number(entry.elapsedMs);
+    sw.elapsedMs = Number.isFinite(elapsedMs) && elapsedMs > 0 ? elapsedMs : 0;
+
+    const startedAt = Number(entry.startedAt);
+    if (entry.running && Number.isFinite(startedAt) && startedAt > 0) {
+      sw.running = true;
+      sw.startedAt = startedAt;
+      tickStopwatch(sw);
+    } else {
+      sw.running = false;
+      sw.startedAt = null;
+    }
+  }
 }
 
 function renderStopwatch(sw) {
@@ -1780,9 +2025,9 @@ function startStopwatch(sw) {
   if (sw.running) return;
   sw.running = true;
   sw.startedAt = Date.now();
-  if (sw.intervalId != null) clearInterval(sw.intervalId);
-  sw.intervalId = setInterval(() => renderStopwatch(sw), 250);
+  tickStopwatch(sw);
   renderStopwatch(sw);
+  saveStopwatches();
 }
 
 function stopStopwatch(sw) {
@@ -1795,12 +2040,14 @@ function stopStopwatch(sw) {
     sw.intervalId = null;
   }
   renderStopwatch(sw);
+  saveStopwatches();
 }
 
 function resetStopwatch(sw) {
   stopStopwatch(sw);
   sw.elapsedMs = 0;
   renderStopwatch(sw);
+  saveStopwatches();
 }
 
 function closeTransferMenus(exceptRoot = null) {
@@ -2052,106 +2299,135 @@ function bindStopwatchReadingFields() {
   }
 }
 
-function setStopwatchSidebarOpen(open) {
-  document.body.classList.toggle("stopwatch-open", open);
-  stopwatchSidebar.setAttribute("aria-hidden", open ? "false" : "true");
-  stopwatchTab.setAttribute("aria-expanded", open ? "true" : "false");
-  stopwatchTab.setAttribute(
-    "aria-label",
-    open ? "Close stopwatches" : "Open stopwatches"
-  );
-  if (!open) {
-    closeTransferMenus();
-    hideStopwatchReadingFields();
-  }
+for (const tab of sideTabs) {
+  tab.addEventListener("click", () => {
+    setActiveSideTab(tab.dataset.tab);
+  });
 }
 
-function isStopwatchSidebarOpen() {
-  return document.body.classList.contains("stopwatch-open");
+if (nextBookUrlInput) {
+  nextBookUrlInput.addEventListener("change", saveNextBookUrlFromInput);
+  nextBookUrlInput.addEventListener("input", () => {
+    nextBookUrlInput.setCustomValidity("");
+  });
 }
 
-stopwatchEdge.addEventListener("mouseenter", () => {
-  document.body.classList.add("stopwatch-edge-hot");
-});
+if (nextBookPasteBtn) {
+  nextBookPasteBtn.addEventListener("click", () => {
+    pasteNextBookUrl();
+  });
+}
 
-stopwatchEdge.addEventListener("mouseleave", () => {
-  if (!stopwatchTab.matches(":hover") && !isStopwatchSidebarOpen()) {
-    document.body.classList.remove("stopwatch-edge-hot");
-  }
-});
-
-stopwatchTab.addEventListener("mouseenter", () => {
-  document.body.classList.add("stopwatch-edge-hot");
-});
-
-stopwatchTab.addEventListener("mouseleave", () => {
-  if (!stopwatchEdge.matches(":hover") && !isStopwatchSidebarOpen()) {
-    document.body.classList.remove("stopwatch-edge-hot");
-  }
-});
-
-stopwatchTab.addEventListener("click", () => {
-  const next = !isStopwatchSidebarOpen();
-  setStopwatchSidebarOpen(next);
-  if (next) document.body.classList.add("stopwatch-edge-hot");
-  else document.body.classList.remove("stopwatch-edge-hot");
-});
-
-stopwatchSidebar.addEventListener("click", (event) => {
-  const option = event.target.closest(".stopwatch-transfer-option");
-  if (option) {
+if (openThresholdInput) {
+  openThresholdInput.addEventListener("input", () => {
+    openThresholdInput.setCustomValidity("");
+    openThresholdInput.value = digitsOnly(openThresholdInput.value);
+  });
+  openThresholdInput.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
     event.preventDefault();
-    event.stopPropagation();
-    const root = option.closest("[data-stopwatch]");
-    const sw = stopwatches[Number(root?.dataset.stopwatch)];
-    if (sw) transferStopwatch(sw, option.dataset.category);
-    return;
-  }
+    updateOpenThresholdFromInput();
+  });
+}
 
-  const btn = event.target.closest("[data-action]");
-  if (!btn) return;
-  const root = btn.closest("[data-stopwatch]");
-  if (!root) return;
-  const sw = stopwatches[Number(root.dataset.stopwatch)];
-  if (!sw) return;
-  if (btn.dataset.action === "toggle") {
-    if (sw.running) stopStopwatch(sw);
-    else startStopwatch(sw);
-  } else if (btn.dataset.action === "reset") {
-    resetStopwatch(sw);
-  } else if (btn.dataset.action === "transfer") {
-    event.stopPropagation();
-    toggleTransferMenu(sw);
+if (openThresholdUpdateBtn) {
+  openThresholdUpdateBtn.addEventListener("click", () => {
+    updateOpenThresholdFromInput();
+  });
+}
+
+sideEdge.addEventListener("mouseenter", () => {
+  document.body.classList.add("side-edge-hot");
+});
+
+sideEdge.addEventListener("mouseleave", () => {
+  if (!sideBookmark.matches(":hover") && !isSideRailOpen()) {
+    document.body.classList.remove("side-edge-hot");
   }
 });
+
+sideBookmark.addEventListener("mouseenter", () => {
+  document.body.classList.add("side-edge-hot");
+});
+
+sideBookmark.addEventListener("mouseleave", () => {
+  if (!sideEdge.matches(":hover") && !isSideRailOpen()) {
+    document.body.classList.remove("side-edge-hot");
+  }
+});
+
+sideBookmark.addEventListener("click", () => {
+  setSideRailOpen(true);
+  document.body.classList.add("side-edge-hot");
+});
+
+if (sideClose) {
+  sideClose.addEventListener("click", () => {
+    setSideRailOpen(false);
+    document.body.classList.remove("side-edge-hot");
+  });
+}
+
+if (timersPanel) {
+  timersPanel.addEventListener("click", (event) => {
+    const option = event.target.closest(".stopwatch-transfer-option");
+    if (option) {
+      event.preventDefault();
+      event.stopPropagation();
+      const root = option.closest("[data-stopwatch]");
+      const sw = stopwatches[Number(root?.dataset.stopwatch)];
+      if (sw) transferStopwatch(sw, option.dataset.category);
+      return;
+    }
+
+    const btn = event.target.closest("[data-action]");
+    if (!btn) return;
+    const root = btn.closest("[data-stopwatch]");
+    if (!root) return;
+    const sw = stopwatches[Number(root.dataset.stopwatch)];
+    if (!sw) return;
+    if (btn.dataset.action === "toggle") {
+      if (sw.running) stopStopwatch(sw);
+      else startStopwatch(sw);
+    } else if (btn.dataset.action === "reset") {
+      resetStopwatch(sw);
+    } else if (btn.dataset.action === "transfer") {
+      event.stopPropagation();
+      toggleTransferMenu(sw);
+    }
+  });
+}
 
 document.addEventListener("click", (event) => {
   if (event.target.closest(".stopwatch-transfer")) return;
-  if (event.target.closest(".stopwatch-sidebar")) return;
+  if (event.target.closest("#panel-timers")) return;
   closeTransferMenus();
 });
 
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && isStopwatchSidebarOpen()) {
-    const anyMenuOpen = stopwatches.some(
-      (sw) => !sw.root.querySelector(".stopwatch-transfer-menu")?.hidden
-    );
-    const anyReadingFields = stopwatches.some(
-      (sw) => !sw.root.querySelector(".stopwatch-reading-fields")?.hidden
-    );
-    if (anyMenuOpen) {
-      closeTransferMenus();
-      return;
-    }
-    if (anyReadingFields) {
-      hideStopwatchReadingFields();
-      return;
-    }
-    setStopwatchSidebarOpen(false);
-    document.body.classList.remove("stopwatch-edge-hot");
+  if (event.key !== "Escape" || !isSideRailOpen()) return;
+  const anyMenuOpen = stopwatches.some(
+    (sw) => !sw.root.querySelector(".stopwatch-transfer-menu")?.hidden
+  );
+  const anyReadingFields = stopwatches.some(
+    (sw) => !sw.root.querySelector(".stopwatch-reading-fields")?.hidden
+  );
+  if (anyMenuOpen) {
+    closeTransferMenus();
+    return;
   }
+  if (anyReadingFields) {
+    hideStopwatchReadingFields();
+    return;
+  }
+  setSideRailOpen(false);
+  document.body.classList.remove("side-edge-hot");
 });
 
 buildTransferMenus();
 bindStopwatchReadingFields();
+syncNextBookUrlInput();
+syncOpenThresholdInput();
+renderThresholdHistory();
+restoreStopwatches();
 stopwatches.forEach(renderStopwatch);

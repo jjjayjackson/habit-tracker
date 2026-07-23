@@ -108,120 +108,202 @@
       </dialog>
     </main>
 
-    <div id="stopwatch-edge" class="stopwatch-edge" aria-hidden="true"></div>
+    <div id="side-edge" class="side-edge" aria-hidden="true"></div>
     <button
       type="button"
-      id="stopwatch-tab"
-      class="stopwatch-tab"
+      id="side-bookmark"
+      class="side-bookmark"
       aria-expanded="false"
-      aria-controls="stopwatch-sidebar"
-      aria-label="Open stopwatches"
+      aria-controls="side-rail"
+      aria-label="Open tools"
     >
-      <span class="stopwatch-tab-label">Timers</span>
+      <span class="side-bookmark-label">Tools</span>
     </button>
 
     <aside
-      id="stopwatch-sidebar"
-      class="stopwatch-sidebar"
+      id="side-rail"
+      class="side-rail"
       aria-hidden="true"
-      aria-label="Stopwatches"
+      aria-label="Tools"
     >
-      <div class="stopwatch" data-stopwatch="0">
-        <div class="stopwatch-display" aria-live="polite">
-          <span class="stopwatch-hours">00</span>
-          <span class="stopwatch-sep" aria-hidden="true">:</span>
-          <span class="stopwatch-minutes">00</span>
-          <span class="stopwatch-sep" aria-hidden="true">:</span>
-          <span class="stopwatch-seconds">00</span>
-        </div>
-        <div class="stopwatch-actions">
-          <button type="button" class="stopwatch-btn" data-action="toggle">Start</button>
-          <button type="button" class="stopwatch-btn" data-action="reset">Reset</button>
-        </div>
-        <div class="stopwatch-transfer">
-          <button
-            type="button"
-            class="stopwatch-btn stopwatch-transfer-btn"
-            data-action="transfer"
-            aria-haspopup="menu"
-            aria-expanded="false"
-          >
-            Transfer
+      <div class="side-panels">
+        <div class="side-panel-toolbar">
+          <button type="button" id="side-close" class="side-close" aria-label="Close tools">
+            Close
           </button>
-          <div class="stopwatch-transfer-menu" role="menu" hidden></div>
-          <div class="stopwatch-reading-fields" hidden>
-            <label class="sr-only" for="sw-0-page-from">Page from</label>
+        </div>
+
+        <div
+          id="panel-timers"
+          class="side-panel"
+          role="tabpanel"
+          aria-labelledby="tab-timers"
+          data-panel="timers"
+        >
+          <div class="stopwatch" data-stopwatch="0">
+            <div class="stopwatch-display" aria-live="polite">
+              <span class="stopwatch-hours">00</span>
+              <span class="stopwatch-sep" aria-hidden="true">:</span>
+              <span class="stopwatch-minutes">00</span>
+              <span class="stopwatch-sep" aria-hidden="true">:</span>
+              <span class="stopwatch-seconds">00</span>
+            </div>
+            <div class="stopwatch-actions">
+              <button type="button" class="stopwatch-btn" data-action="toggle">Start</button>
+              <button type="button" class="stopwatch-btn" data-action="reset">Reset</button>
+            </div>
+            <div class="stopwatch-transfer">
+              <button
+                type="button"
+                class="stopwatch-btn stopwatch-transfer-btn"
+                data-action="transfer"
+                aria-haspopup="menu"
+                aria-expanded="false"
+              >
+                Transfer
+              </button>
+              <div class="stopwatch-transfer-menu" role="menu" hidden></div>
+              <div class="stopwatch-reading-fields" hidden>
+                <label class="sr-only" for="sw-0-page-from">Page from</label>
+                <input
+                  id="sw-0-page-from"
+                  class="composer-input page-input stopwatch-page-input"
+                  type="text"
+                  inputmode="numeric"
+                  placeholder="from"
+                  autocomplete="off"
+                  data-page-from
+                />
+                <span class="page-range-sep" aria-hidden="true">–</span>
+                <label class="sr-only" for="sw-0-page-to">Page to</label>
+                <input
+                  id="sw-0-page-to"
+                  class="composer-input page-input stopwatch-page-input"
+                  type="text"
+                  inputmode="numeric"
+                  placeholder="to"
+                  autocomplete="off"
+                  data-page-to
+                />
+              </div>
+            </div>
+          </div>
+
+          <div class="stopwatch" data-stopwatch="1">
+            <div class="stopwatch-display" aria-live="polite">
+              <span class="stopwatch-hours">00</span>
+              <span class="stopwatch-sep" aria-hidden="true">:</span>
+              <span class="stopwatch-minutes">00</span>
+              <span class="stopwatch-sep" aria-hidden="true">:</span>
+              <span class="stopwatch-seconds">00</span>
+            </div>
+            <div class="stopwatch-actions">
+              <button type="button" class="stopwatch-btn" data-action="toggle">Start</button>
+              <button type="button" class="stopwatch-btn" data-action="reset">Reset</button>
+            </div>
+            <div class="stopwatch-transfer">
+              <button
+                type="button"
+                class="stopwatch-btn stopwatch-transfer-btn"
+                data-action="transfer"
+                aria-haspopup="menu"
+                aria-expanded="false"
+              >
+                Transfer
+              </button>
+              <div class="stopwatch-transfer-menu" role="menu" hidden></div>
+              <div class="stopwatch-reading-fields" hidden>
+                <label class="sr-only" for="sw-1-page-from">Page from</label>
+                <input
+                  id="sw-1-page-from"
+                  class="composer-input page-input stopwatch-page-input"
+                  type="text"
+                  inputmode="numeric"
+                  placeholder="from"
+                  autocomplete="off"
+                  data-page-from
+                />
+                <span class="page-range-sep" aria-hidden="true">–</span>
+                <label class="sr-only" for="sw-1-page-to">Page to</label>
+                <input
+                  id="sw-1-page-to"
+                  class="composer-input page-input stopwatch-page-input"
+                  type="text"
+                  inputmode="numeric"
+                  placeholder="to"
+                  autocomplete="off"
+                  data-page-to
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div
+          id="panel-next-book"
+          class="side-panel side-panel-next-book"
+          role="tabpanel"
+          aria-labelledby="tab-next-book"
+          data-panel="next-book"
+          hidden
+        >
+          <div class="next-book-form">
+            <label class="sr-only" for="next-book-url">Next book URL</label>
             <input
-              id="sw-0-page-from"
-              class="composer-input page-input stopwatch-page-input"
+              id="next-book-url"
+              class="composer-input next-book-url-input"
+              type="url"
+              name="nextBookUrl"
+              placeholder="https://…"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <button type="button" id="next-book-paste" class="next-book-paste-btn">
+              Paste
+            </button>
+            <label class="sr-only" for="open-threshold-input">Open threshold percent</label>
+            <input
+              id="open-threshold-input"
+              class="composer-input next-book-url-input open-threshold-input"
               type="text"
               inputmode="numeric"
-              placeholder="from"
+              name="openThreshold"
+              placeholder="80"
               autocomplete="off"
-              data-page-from
+              spellcheck="false"
             />
-            <span class="page-range-sep" aria-hidden="true">–</span>
-            <label class="sr-only" for="sw-0-page-to">Page to</label>
-            <input
-              id="sw-0-page-to"
-              class="composer-input page-input stopwatch-page-input"
-              type="text"
-              inputmode="numeric"
-              placeholder="to"
-              autocomplete="off"
-              data-page-to
-            />
+            <button type="button" id="open-threshold-update" class="next-book-paste-btn">
+              Update
+            </button>
+            <ul id="threshold-history" class="threshold-history" aria-label="Threshold update history"></ul>
           </div>
         </div>
       </div>
 
-      <div class="stopwatch" data-stopwatch="1">
-        <div class="stopwatch-display" aria-live="polite">
-          <span class="stopwatch-hours">00</span>
-          <span class="stopwatch-sep" aria-hidden="true">:</span>
-          <span class="stopwatch-minutes">00</span>
-          <span class="stopwatch-sep" aria-hidden="true">:</span>
-          <span class="stopwatch-seconds">00</span>
-        </div>
-        <div class="stopwatch-actions">
-          <button type="button" class="stopwatch-btn" data-action="toggle">Start</button>
-          <button type="button" class="stopwatch-btn" data-action="reset">Reset</button>
-        </div>
-        <div class="stopwatch-transfer">
-          <button
-            type="button"
-            class="stopwatch-btn stopwatch-transfer-btn"
-            data-action="transfer"
-            aria-haspopup="menu"
-            aria-expanded="false"
-          >
-            Transfer
-          </button>
-          <div class="stopwatch-transfer-menu" role="menu" hidden></div>
-          <div class="stopwatch-reading-fields" hidden>
-            <label class="sr-only" for="sw-1-page-from">Page from</label>
-            <input
-              id="sw-1-page-from"
-              class="composer-input page-input stopwatch-page-input"
-              type="text"
-              inputmode="numeric"
-              placeholder="from"
-              autocomplete="off"
-              data-page-from
-            />
-            <span class="page-range-sep" aria-hidden="true">–</span>
-            <label class="sr-only" for="sw-1-page-to">Page to</label>
-            <input
-              id="sw-1-page-to"
-              class="composer-input page-input stopwatch-page-input"
-              type="text"
-              inputmode="numeric"
-              placeholder="to"
-              autocomplete="off"
-              data-page-to
-            />
-          </div>
-        </div>
+      <div class="side-tabs" role="tablist" aria-orientation="vertical" aria-label="Tool tabs">
+        <button
+          type="button"
+          class="side-tab"
+          role="tab"
+          id="tab-timers"
+          aria-controls="panel-timers"
+          aria-selected="true"
+          data-tab="timers"
+        >
+          <span class="side-tab-label">Timers</span>
+        </button>
+        <button
+          type="button"
+          class="side-tab"
+          role="tab"
+          id="tab-next-book"
+          aria-controls="panel-next-book"
+          aria-selected="false"
+          data-tab="next-book"
+          tabindex="-1"
+        >
+          <span class="side-tab-label">Next book</span>
+        </button>
       </div>
     </aside>
 

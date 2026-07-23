@@ -19,12 +19,14 @@
   --composer-hover: #222;
   --focus: #fff;
   --font: "SF Pro Text", "Segoe UI", Helvetica, Arial, sans-serif;
-  --stopwatch-sidebar-width: 12.5rem;
-  --stopwatch-open-offset: 0px;
+  --side-tab-width: 2.35rem;
+  --side-panel-width: 12.5rem;
+  --side-rail-width: calc(var(--side-tab-width) + var(--side-panel-width));
+  --side-open-offset: 0px;
 }
 
-body.stopwatch-open {
-  --stopwatch-open-offset: var(--stopwatch-sidebar-width);
+body.side-open {
+  --side-open-offset: var(--side-rail-width);
 }
 
 html,
@@ -57,7 +59,7 @@ body {
   display: flex;
   flex-direction: column;
   padding: 1.5rem 1.5rem 6.5rem;
-  padding-right: calc(1.5rem + var(--stopwatch-open-offset));
+  padding-right: calc(1.5rem + var(--side-open-offset));
   transition: padding-right 0.22s ease;
 }
 
@@ -365,10 +367,10 @@ body {
 
 .reading-panel {
   position: fixed;
-  left: calc((100% - var(--stopwatch-open-offset)) / 2);
+  left: calc((100% - var(--side-open-offset)) / 2);
   bottom: 5.35rem;
   transform: translateX(-50%);
-  width: min(920px, calc(100% - var(--stopwatch-open-offset) - 2rem));
+  width: min(920px, calc(100% - var(--side-open-offset) - 2rem));
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -451,10 +453,10 @@ body {
 
 .composer {
   position: fixed;
-  left: calc((100% - var(--stopwatch-open-offset)) / 2);
+  left: calc((100% - var(--side-open-offset)) / 2);
   bottom: 1.25rem;
   transform: translateX(-50%);
-  width: min(920px, calc(100% - var(--stopwatch-open-offset) - 2rem));
+  width: min(920px, calc(100% - var(--side-open-offset) - 2rem));
   display: grid;
   grid-template-columns: minmax(150px, 220px) 1fr auto;
   gap: 0.55rem;
@@ -609,8 +611,8 @@ body {
   gap: 0.45rem;
 }
 
-/* —— Right-edge stopwatch sidebar —— */
-.stopwatch-edge {
+/* —— Right-edge hideable tool rail —— */
+.side-edge {
   position: fixed;
   top: 0;
   right: 0;
@@ -619,7 +621,7 @@ body {
   z-index: 40;
 }
 
-.stopwatch-tab {
+.side-bookmark {
   position: fixed;
   top: 50%;
   right: 0;
@@ -640,47 +642,40 @@ body {
   transition: transform 0.2s ease, color 0.15s ease, background 0.15s ease;
 }
 
-.stopwatch-tab-label {
+.side-bookmark-label {
   writing-mode: vertical-rl;
   transform: rotate(180deg);
   display: inline-block;
 }
 
-body.stopwatch-edge-hot .stopwatch-tab,
-.stopwatch-tab:focus-visible,
-body.stopwatch-open .stopwatch-tab {
+body.side-edge-hot .side-bookmark,
+.side-bookmark:focus-visible {
   transform: translate(0, -50%);
 }
 
-.stopwatch-tab:hover,
-.stopwatch-tab:focus-visible {
+body.side-open .side-bookmark {
+  display: none;
+}
+
+.side-bookmark:hover,
+.side-bookmark:focus-visible {
   color: var(--fg);
   background: var(--composer-hover);
 }
 
-.stopwatch-tab:focus-visible {
+.side-bookmark:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 
-body.stopwatch-open .stopwatch-tab {
-  right: var(--stopwatch-sidebar-width);
-  color: var(--fg);
-}
-
-.stopwatch-sidebar {
+.side-rail {
   position: fixed;
   top: 0;
   right: 0;
-  /* Above .stopwatch-tab so transfer menus aren't covered by the Timers tab */
   z-index: 43;
-  width: var(--stopwatch-sidebar-width);
-  height: 100vh;
   display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 1.75rem;
-  padding: 1.25rem 0.85rem;
+  width: var(--side-rail-width);
+  height: 100vh;
   background: #0a0a0a;
   border-left: 1px solid var(--composer-border);
   transform: translateX(100%);
@@ -688,9 +683,180 @@ body.stopwatch-open .stopwatch-tab {
   pointer-events: none;
 }
 
-body.stopwatch-open .stopwatch-sidebar {
+body.side-open .side-rail {
   transform: translateX(0);
   pointer-events: auto;
+}
+
+.side-panels {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.side-panel-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-start;
+  padding: 0.65rem 0.75rem 0;
+}
+
+.side-close {
+  margin: 0;
+  padding: 0.3rem 0.55rem;
+  border: 1px solid var(--composer-border);
+  border-radius: 0.45rem;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.side-close:hover {
+  color: var(--fg);
+  background: var(--composer-hover);
+}
+
+.side-close:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.side-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1.75rem;
+  padding: 1.25rem 0.85rem;
+  overflow-y: auto;
+}
+
+.side-panel-next-book {
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+}
+
+.next-book-form {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+}
+
+.next-book-url-input {
+  width: 100%;
+  min-width: 0;
+  padding: 0.45rem 0.5rem;
+  font-size: 0.78rem;
+}
+
+.next-book-paste-btn {
+  margin: 0;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid var(--composer-border);
+  border-radius: 0.4rem;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.68rem;
+  cursor: pointer;
+  width: auto;
+  flex: none;
+}
+
+.next-book-paste-btn:hover {
+  color: var(--fg);
+  background: var(--composer-hover);
+}
+
+.next-book-paste-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.open-threshold-input {
+  text-align: center;
+  margin-top: 0.35rem;
+}
+
+.threshold-history {
+  list-style: none;
+  margin: 0.55rem 0 0;
+  padding: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.threshold-history:empty {
+  display: none;
+}
+
+.threshold-history-item {
+  margin: 0;
+  padding: 0;
+  color: var(--muted);
+  font-size: 0.65rem;
+  line-height: 1.3;
+  text-align: center;
+}
+
+.side-tabs {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 var(--side-tab-width);
+  width: var(--side-tab-width);
+  border-left: 1px solid var(--composer-border);
+  background: #050505;
+}
+
+.side-tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 1rem 0.2rem;
+  border: 0;
+  border-bottom: 1px solid var(--composer-border);
+  border-right: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.side-tab-label {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  display: inline-block;
+}
+
+.side-tab:hover {
+  color: var(--fg);
+  background: var(--composer-hover);
+}
+
+.side-tab[aria-selected="true"] {
+  color: var(--fg);
+  background: #111;
+  border-right-color: #fff;
+}
+
+.side-tab:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
 }
 
 .stopwatch {
@@ -832,7 +998,7 @@ body.stopwatch-open .stopwatch-sidebar {
 @media (max-width: 640px) {
   .app {
     padding: 1rem 1rem 10.5rem;
-    padding-right: calc(1rem + var(--stopwatch-open-offset));
+    padding-right: calc(1rem + var(--side-open-offset));
   }
 
   .reading-panel {
@@ -867,6 +1033,6 @@ body.stopwatch-open .stopwatch-sidebar {
   }
 
   :root {
-    --stopwatch-sidebar-width: 11.5rem;
+    --side-panel-width: 11.5rem;
   }
 }
