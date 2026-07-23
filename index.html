@@ -21,6 +21,23 @@
         </table>
       </section>
 
+      <div id="reading-panel" class="reading-panel" hidden>
+        <div class="reading-progress">
+          <div class="reading-progress-track" aria-hidden="true">
+            <div id="reading-progress-fill" class="reading-progress-fill"></div>
+          </div>
+          <span id="reading-progress-label" class="reading-progress-label"></span>
+        </div>
+        <div class="reading-actions">
+          <button type="button" id="edit-total-btn" class="reading-action-btn">
+            Edit total
+          </button>
+          <button type="button" id="new-book-btn" class="reading-action-btn">
+            New book
+          </button>
+        </div>
+      </div>
+
       <form id="composer" class="composer" autocomplete="off">
         <label class="sr-only" for="category">Category</label>
         <select id="category" class="composer-category" name="category" required>
@@ -31,15 +48,41 @@
           <option value="TDs">TDs</option>
         </select>
 
-        <label class="sr-only" for="duration">Duration</label>
-        <input
-          id="duration"
-          class="composer-input"
-          name="duration"
-          type="text"
-          placeholder="1 13 · 45m · 1h 30m"
-          required
-        />
+        <div id="composer-fields" class="composer-fields">
+          <label class="sr-only" for="duration">Duration</label>
+          <input
+            id="duration"
+            class="composer-input"
+            name="duration"
+            type="text"
+            placeholder="1 13 · 45m · 1h 30m"
+            required
+          />
+
+          <div id="reading-fields" class="reading-fields" hidden>
+            <label class="sr-only" for="page-from">Page from</label>
+            <input
+              id="page-from"
+              class="composer-input page-input"
+              name="pageFrom"
+              type="text"
+              inputmode="numeric"
+              placeholder="from"
+              autocomplete="off"
+            />
+            <span class="page-range-sep" aria-hidden="true">–</span>
+            <label class="sr-only" for="page-to">Page to</label>
+            <input
+              id="page-to"
+              class="composer-input page-input"
+              name="pageTo"
+              type="text"
+              inputmode="numeric"
+              placeholder="to"
+              autocomplete="off"
+            />
+          </div>
+        </div>
 
         <button class="composer-submit" type="submit" aria-label="Submit">
           <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
@@ -50,6 +93,30 @@
           </svg>
         </button>
       </form>
+
+      <dialog id="book-dialog" class="book-dialog">
+        <form id="book-dialog-form" class="book-dialog-form">
+          <h2 id="book-dialog-title" class="book-dialog-title">New book</h2>
+          <p class="book-dialog-hint">How many pages does this book have?</p>
+          <label class="sr-only" for="book-total-pages">Total pages</label>
+          <input
+            id="book-total-pages"
+            class="composer-input book-total-input"
+            type="text"
+            inputmode="numeric"
+            placeholder="e.g. 241"
+            required
+          />
+          <div class="book-dialog-actions">
+            <button type="button" class="reading-action-btn" id="book-dialog-cancel">
+              Cancel
+            </button>
+            <button type="submit" class="reading-action-btn reading-action-btn-primary" id="book-dialog-confirm">
+              Save
+            </button>
+          </div>
+        </form>
+      </dialog>
     </main>
 
     <script src="script.js"></script>

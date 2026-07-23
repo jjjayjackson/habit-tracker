@@ -4,6 +4,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 :root {
   color-scheme: dark;
   --bg: #000;
@@ -184,6 +188,91 @@ body {
   pointer-events: none;
 }
 
+.reading-panel {
+  position: fixed;
+  left: 50%;
+  bottom: 5.35rem;
+  transform: translateX(-50%);
+  width: min(920px, calc(100% - 2rem));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.45rem 0.65rem;
+  background: var(--composer-bg);
+  border: 1px solid var(--composer-border);
+  border-radius: 0.9rem;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+}
+
+.reading-progress {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.reading-progress-track {
+  flex: 1;
+  height: 0.45rem;
+  border-radius: 999px;
+  background: #2a2a2a;
+  overflow: hidden;
+}
+
+.reading-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: #fff;
+  border-radius: inherit;
+  transition: width 0.2s ease;
+}
+
+.reading-progress-label {
+  flex: 0 0 auto;
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.reading-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex: 0 0 auto;
+}
+
+.reading-action-btn {
+  font: inherit;
+  font-size: 0.8rem;
+  color: var(--fg);
+  background: #111;
+  border: 1px solid var(--composer-border);
+  border-radius: 0.65rem;
+  padding: 0.35rem 0.65rem;
+  cursor: pointer;
+}
+
+.reading-action-btn:hover {
+  background: var(--composer-hover);
+}
+
+.reading-action-btn-primary {
+  background: #fff;
+  color: #000;
+  border-color: #fff;
+}
+
+.reading-action-btn-primary:hover {
+  background: #e8e8e8;
+}
+
+.reading-action-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
 .composer {
   position: fixed;
   left: 50%;
@@ -199,6 +288,37 @@ body {
   border: 1px solid var(--composer-border);
   border-radius: 1.25rem;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+}
+
+.composer-fields {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.composer-fields .composer-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.reading-fields {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex: 0 0 auto;
+}
+
+.page-input {
+  width: 3.5rem;
+  flex: 0 0 auto;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.page-range-sep {
+  color: var(--muted);
+  padding: 0 0.1rem;
 }
 
 .composer-category,
@@ -264,24 +384,78 @@ body {
   outline-offset: 2px;
 }
 
+.book-dialog {
+  border: 1px solid var(--composer-border);
+  border-radius: 1rem;
+  padding: 0;
+  background: var(--composer-bg);
+  color: var(--fg);
+  width: min(360px, calc(100% - 2rem));
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+}
+
+.book-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.65);
+}
+
+.book-dialog-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1.1rem 1.15rem 1.15rem;
+}
+
+.book-dialog-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.book-dialog-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.book-total-input {
+  width: 100%;
+  height: 2.6rem;
+  padding: 0 0.75rem;
+  background: #111;
+  border: 1px solid var(--composer-border);
+  border-radius: 0.75rem;
+}
+
+.book-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.45rem;
+}
+
 @media (max-width: 640px) {
   .app {
-    padding: 1rem 1rem 8.5rem;
+    padding: 1rem 1rem 10.5rem;
+  }
+
+  .reading-panel {
+    bottom: 6.85rem;
+    flex-wrap: wrap;
   }
 
   .composer {
     grid-template-columns: 1fr auto;
     grid-template-areas:
       "category category"
-      "input submit";
+      "fields submit";
   }
 
   .composer-category {
     grid-area: category;
   }
 
-  .composer-input {
-    grid-area: input;
+  .composer-fields {
+    grid-area: fields;
+    flex-wrap: wrap;
   }
 
   .composer-submit {
