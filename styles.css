@@ -19,6 +19,12 @@
   --composer-hover: #222;
   --focus: #fff;
   --font: "SF Pro Text", "Segoe UI", Helvetica, Arial, sans-serif;
+  --stopwatch-sidebar-width: 12.5rem;
+  --stopwatch-open-offset: 0px;
+}
+
+body.stopwatch-open {
+  --stopwatch-open-offset: var(--stopwatch-sidebar-width);
 }
 
 html,
@@ -51,6 +57,8 @@ body {
   display: flex;
   flex-direction: column;
   padding: 1.5rem 1.5rem 6.5rem;
+  padding-right: calc(1.5rem + var(--stopwatch-open-offset));
+  transition: padding-right 0.22s ease;
 }
 
 .log {
@@ -298,7 +306,10 @@ body {
 .timestamp-popup {
   position: fixed;
   z-index: 1000;
-  padding: 0.35rem 0.55rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.4rem 0.55rem;
   background: #111;
   color: var(--fg);
   border: 1px solid var(--composer-border);
@@ -308,6 +319,11 @@ body {
   letter-spacing: 0.02em;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
   pointer-events: none;
+}
+
+.timestamp-popup-actual {
+  color: var(--muted);
+  font-size: 0.78rem;
 }
 
 .context-menu {
@@ -349,10 +365,10 @@ body {
 
 .reading-panel {
   position: fixed;
-  left: 50%;
+  left: calc((100% - var(--stopwatch-open-offset)) / 2);
   bottom: 5.35rem;
   transform: translateX(-50%);
-  width: min(920px, calc(100% - 2rem));
+  width: min(920px, calc(100% - var(--stopwatch-open-offset) - 2rem));
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -362,6 +378,7 @@ body {
   border: 1px solid var(--composer-border);
   border-radius: 0.9rem;
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+  transition: left 0.22s ease, width 0.22s ease;
 }
 
 .reading-progress {
@@ -434,13 +451,14 @@ body {
 
 .composer {
   position: fixed;
-  left: 50%;
+  left: calc((100% - var(--stopwatch-open-offset)) / 2);
   bottom: 1.25rem;
   transform: translateX(-50%);
-  width: min(920px, calc(100% - 2rem));
+  width: min(920px, calc(100% - var(--stopwatch-open-offset) - 2rem));
   display: grid;
   grid-template-columns: minmax(150px, 220px) 1fr auto;
   gap: 0.55rem;
+  transition: left 0.22s ease, width 0.22s ease;
   align-items: center;
   padding: 0.55rem;
   background: var(--composer-bg);
@@ -591,9 +609,230 @@ body {
   gap: 0.45rem;
 }
 
+/* —— Right-edge stopwatch sidebar —— */
+.stopwatch-edge {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 18px;
+  height: 100vh;
+  z-index: 40;
+}
+
+.stopwatch-tab {
+  position: fixed;
+  top: 50%;
+  right: 0;
+  z-index: 42;
+  transform: translate(100%, -50%);
+  margin: 0;
+  padding: 0.85rem 0.35rem;
+  border: 1px solid var(--composer-border);
+  border-right: 0;
+  border-radius: 0.55rem 0 0 0.55rem;
+  background: var(--composer-bg);
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: transform 0.2s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.stopwatch-tab-label {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  display: inline-block;
+}
+
+body.stopwatch-edge-hot .stopwatch-tab,
+.stopwatch-tab:focus-visible,
+body.stopwatch-open .stopwatch-tab {
+  transform: translate(0, -50%);
+}
+
+.stopwatch-tab:hover,
+.stopwatch-tab:focus-visible {
+  color: var(--fg);
+  background: var(--composer-hover);
+}
+
+.stopwatch-tab:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+body.stopwatch-open .stopwatch-tab {
+  right: var(--stopwatch-sidebar-width);
+  color: var(--fg);
+}
+
+.stopwatch-sidebar {
+  position: fixed;
+  top: 0;
+  right: 0;
+  /* Above .stopwatch-tab so transfer menus aren't covered by the Timers tab */
+  z-index: 43;
+  width: var(--stopwatch-sidebar-width);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1.75rem;
+  padding: 1.25rem 0.85rem;
+  background: #0a0a0a;
+  border-left: 1px solid var(--composer-border);
+  transform: translateX(100%);
+  transition: transform 0.22s ease;
+  pointer-events: none;
+}
+
+body.stopwatch-open .stopwatch-sidebar {
+  transform: translateX(0);
+  pointer-events: auto;
+}
+
+.stopwatch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.stopwatch-display {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 0.02rem;
+  min-width: 7.25rem;
+  padding: 0.55rem 0.35rem;
+  border: 1px solid var(--composer-border);
+  border-radius: 0.55rem;
+  background: #111;
+  font-variant-numeric: tabular-nums;
+  font-size: 1.05rem;
+  letter-spacing: 0.02em;
+  line-height: 1;
+}
+
+.stopwatch-sep {
+  color: var(--muted);
+  padding: 0 0.05rem;
+}
+
+.stopwatch-actions {
+  display: flex;
+  flex-direction: row;
+  gap: 0.35rem;
+  width: 100%;
+}
+
+.stopwatch-btn {
+  flex: 1;
+  width: auto;
+  margin: 0;
+  padding: 0.4rem 0.35rem;
+  border: 1px solid var(--composer-border);
+  border-radius: 0.45rem;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.stopwatch-btn:hover {
+  background: var(--composer-hover);
+}
+
+.stopwatch-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.stopwatch-btn[data-action="toggle"].is-running {
+  border-color: #fff;
+  color: #fff;
+}
+
+.stopwatch-transfer {
+  position: relative;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.stopwatch-transfer-btn {
+  width: 100%;
+  flex: none;
+}
+
+.stopwatch-transfer-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 0.35rem);
+  z-index: 50;
+  width: 100%;
+  padding: 0.3rem;
+  border: 1px solid var(--composer-border);
+  border-radius: 0.5rem;
+  background: #141414;
+  box-shadow: -4px 6px 24px rgba(0, 0, 0, 0.45);
+}
+
+.stopwatch-transfer-option {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0.45rem 0.55rem;
+  border: 0;
+  border-radius: 0.35rem;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.78rem;
+  text-align: left;
+  cursor: pointer;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.stopwatch-transfer-option:hover,
+.stopwatch-transfer-option:focus-visible {
+  background: var(--composer-hover);
+  outline: none;
+}
+
+.stopwatch-reading-fields {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  width: 100%;
+}
+
+.stopwatch-reading-fields .stopwatch-page-input {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  padding: 0.35rem 0.4rem;
+  font-size: 0.72rem;
+  text-align: center;
+}
+
+.stopwatch-reading-fields .page-range-sep {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
 @media (max-width: 640px) {
   .app {
     padding: 1rem 1rem 10.5rem;
+    padding-right: calc(1rem + var(--stopwatch-open-offset));
   }
 
   .reading-panel {
@@ -625,5 +864,9 @@ body {
   .log-table td {
     padding: 0.7rem 0.45rem;
     font-size: 0.88rem;
+  }
+
+  :root {
+    --stopwatch-sidebar-width: 11.5rem;
   }
 }

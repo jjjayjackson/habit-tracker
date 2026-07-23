@@ -146,14 +146,47 @@ function daysSinceMay22(date = new Date()) {
   return Math.round((today - start) / msPerDay);
 }
 
-/** Display duration as 1h 33m or 45m. */
+/** Display duration as 1h 33m or 45m (whole minutes). */
 function formatDuration(totalMinutes) {
-  const minutes = Math.max(0, Math.round(totalMinutes));
+  const minutes = Math.max(0, Math.floor(totalMinutes));
   const hours = Math.floor(minutes / 60);
   const mins = minutes % 60;
   if (hours === 0) return `${mins}m`;
   if (mins === 0) return `${hours}h`;
   return `${hours}h ${mins}m`;
+}
+
+/** Exact duration for hover / sub-minute detail: 2s, 1m 5s, 1h 2m 3s. */
+function formatExactDuration(totalSeconds) {
+  const seconds = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(seconds / 3600);
+  const mins = Math.floor((seconds % 3600) / 60);
+  const secs = seconds % 60;
+  if (hours > 0) {
+    if (mins === 0 && secs === 0) return `${hours}h`;
+    if (secs === 0) return `${hours}h ${mins}m`;
+    return `${hours}h ${mins}m ${secs}s`;
+  }
+  if (mins > 0) {
+    if (secs === 0) return `${mins}m`;
+    return `${mins}m ${secs}s`;
+  }
+  return `${secs}s`;
+}
+
+/** Entry / running-total label: sub-minute stays vague; otherwise whole minutes. */
+function formatLoggedDuration(totalSeconds) {
+  const seconds = Math.max(0, Math.floor(totalSeconds));
+  if (seconds < 60) return "Less than a minute";
+  return formatDuration(seconds / 60);
+}
+
+function entrySeconds(entry) {
+  if (!entry || typeof entry !== "object") return 0;
+  if (Number.isInteger(entry.seconds) && entry.seconds >= 0) return entry.seconds;
+  const minutes = Number(entry.minutes);
+  if (!Number.isFinite(minutes) || minutes < 0) return 0;
+  return Math.round(minutes * 60);
 }
 
 /** 24h clock time for the timestamp popup. */
@@ -164,8 +197,8 @@ function formatClock24(date) {
 }
 
 /**
- * Parse sloppy duration text into total minutes.
- * Rule 1: explicit units win
+ * Parse sloppy duration text into total seconds.
+ * Rule 1: explicit units win (including seconds)
  * Rule 2: two bare numbers → hours + minutes
  * Rule 3: one bare number → minutes
  */
@@ -174,7 +207,9 @@ function parseDuration(raw) {
   const text = raw.trim().toLowerCase().replace(/,/g, "");
   if (!text) return null;
 
-  const hasUnit = /h|hr|hour|hours|m|min|mins|minute|minutes|:/.test(text);
+  const hasUnit = /h|hr|hour|hours|m|min|mins|minute|minutes|s|sec|secs|second|seconds|:/.test(
+    text,
+  );
 
   if (hasUnit) {
     return parseExplicitDuration(text);
@@ -187,7 +222,7 @@ function parseDuration(raw) {
     if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
     if (!Number.isInteger(hours) || !Number.isInteger(minutes)) return null;
     if (hours < 0 || minutes < 0 || minutes > 59) return null;
-    return hours * 60 + minutes;
+    return (hours * 60 + minutes) * 60;
   }
 
   const single = text.match(/^(\d+(?:\.\d+)?)$/);
@@ -195,33 +230,38 @@ function parseDuration(raw) {
     const value = Number(single[1]);
     if (!Number.isFinite(value) || value < 0) return null;
     if (!Number.isInteger(value)) return null;
-    return value;
+    return value * 60;
   }
 
   return null;
 }
 
 function parseExplicitDuration(text) {
-  const colon = text.match(/^(\d+)\s*:\s*(\d{1,2})(?:\s*:\s*\d{1,2})?$/);
+  const colon = text.match(/^(\d+)\s*:\s*(\d{1,2})(?:\s*:\s*(\d{1,2}))?$/);
   if (colon) {
     const hours = Number(colon[1]);
     const minutes = Number(colon[2]);
-    if (minutes > 59) return null;
-    return hours * 60 + minutes;
+    const seconds = colon[3] != null ? Number(colon[3]) : 0;
+    if (minutes > 59 || seconds > 59) return null;
+    return hours * 3600 + minutes * 60 + seconds;
   }
 
   let remaining = text
     .replace(/\bhours?\b/g, "h")
     .replace(/\bhrs?\b/g, "h")
     .replace(/\bminutes?\b/g, "m")
-    .replace(/\bmins?\b/g, "m");
+    .replace(/\bmins?\b/g, "m")
+    .replace(/\bseconds?\b/g, "s")
+    .replace(/\bsecs?\b/g, "s");
 
   remaining = remaining.replace(/\s+/g, " ").trim();
 
   let hours = 0;
   let minutes = 0;
+  let seconds = 0;
   let matchedHour = false;
   let matchedMin = false;
+  let matchedSec = false;
   let matchedTrailing = false;
 
   const hourMatch = remaining.match(/(\d+(?:\.\d+)?)\s*h/);
@@ -240,8 +280,16 @@ function parseExplicitDuration(text) {
     matchedMin = true;
   }
 
+  const secMatch = remaining.match(/(\d+(?:\.\d+)?)\s*s\b/);
+  if (secMatch) {
+    seconds = Number(secMatch[1]);
+    if (!Number.isFinite(seconds) || seconds < 0) return null;
+    remaining = remaining.replace(secMatch[0], " ");
+    matchedSec = true;
+  }
+
   const trailing = remaining.match(/(\d+(?:\.\d+)?)/);
-  if (trailing && matchedHour && !matchedMin) {
+  if (trailing && matchedHour && !matchedMin && !matchedSec) {
     minutes = Number(trailing[1]);
     if (!Number.isFinite(minutes) || minutes < 0 || minutes > 59) return null;
     remaining = remaining.replace(trailing[0], " ");
@@ -249,16 +297,17 @@ function parseExplicitDuration(text) {
   }
 
   remaining = remaining.replace(/\s+/g, "").trim();
-  if ((!matchedHour && !matchedMin) || remaining.length > 0) return null;
+  if ((!matchedHour && !matchedMin && !matchedSec) || remaining.length > 0) return null;
 
-  if (matchedHour && !matchedMin && !matchedTrailing && !Number.isInteger(hours)) {
-    return Math.round(hours * 60);
+  if (matchedHour && !matchedMin && !matchedSec && !matchedTrailing && !Number.isInteger(hours)) {
+    return Math.round(hours * 3600);
   }
 
-  if (!Number.isInteger(hours) && matchedMin) return null;
+  if (!Number.isInteger(hours) && (matchedMin || matchedSec)) return null;
   if (!Number.isInteger(minutes)) return null;
+  if (!Number.isInteger(seconds)) return null;
 
-  return Math.round(hours) * 60 + minutes;
+  return Math.round(hours) * 3600 + minutes * 60 + seconds;
 }
 
 function escapeHtml(text) {
@@ -397,6 +446,33 @@ function updateActiveBookBookmark(pageTo) {
   saveBooks();
 }
 
+function maxFinishedPageForBook(bookId) {
+  let max = 0;
+  for (const rows of Object.values(state.days)) {
+    if (!Array.isArray(rows)) continue;
+    for (const row of rows) {
+      if (row.category !== "Reading" || !Array.isArray(row.durations)) continue;
+      for (const entry of row.durations) {
+        if (entry.bookId !== bookId) continue;
+        if (Number.isInteger(entry.pageTo)) {
+          max = Math.max(max, entry.pageTo);
+        }
+      }
+    }
+  }
+  return max;
+}
+
+function recomputeBookBookmark(bookId) {
+  const book = state.books.books.find((b) => b.id === bookId);
+  if (!book) return;
+  book.lastFinishedPage = maxFinishedPageForBook(bookId);
+  if (book.lastFinishedPage > book.totalPages) {
+    book.lastFinishedPage = book.totalPages;
+  }
+  saveBooks();
+}
+
 function suggestedPageFrom(book) {
   if (!book || book.lastFinishedPage < 1) return null;
   const next = book.lastFinishedPage + 1;
@@ -417,14 +493,27 @@ function findRowIndex(dayKey, category) {
 
 function normalizeDuration(entry, category) {
   if (!entry || typeof entry !== "object") return null;
-  const minutes = Number(entry.minutes);
-  if (!Number.isFinite(minutes) || minutes < 0) return null;
+
+  let seconds;
+  if (Number.isInteger(entry.seconds) && entry.seconds >= 0) {
+    seconds = entry.seconds;
+  } else {
+    const minutes = Number(entry.minutes);
+    if (!Number.isFinite(minutes) || minutes < 0) return null;
+    seconds = Math.round(minutes * 60);
+  }
+  if (!Number.isInteger(seconds) || seconds < 0) return null;
+
   const loggedAt =
     typeof entry.loggedAt === "string" && entry.loggedAt
       ? entry.loggedAt
       : new Date().toISOString();
 
-  const normalized = { minutes: Math.round(minutes), loggedAt };
+  const normalized = {
+    minutes: Math.floor(seconds / 60),
+    seconds,
+    loggedAt,
+  };
 
   if (category === "Reading") {
     const pageFrom = Number(entry.pageFrom);
@@ -585,22 +674,22 @@ function upsertDuration(category, entry) {
 }
 
 function runningTotals(durations) {
-  let sum = 0;
+  let sumSeconds = 0;
   return durations.map((entry) => {
-    sum += entry.minutes;
-    return sum;
+    sumSeconds += entrySeconds(entry);
+    return sumSeconds;
   });
 }
 
 function formatReadingEntry(entry) {
-  return `${formatDuration(entry.minutes)} ${entry.pageFrom}-${entry.pageTo}`;
+  return `${formatLoggedDuration(entrySeconds(entry))} ${entry.pageFrom}-${entry.pageTo}`;
 }
 
 function formatEntryLabel(row, entry) {
   if (row.category === "Reading" && entry.pageFrom != null && entry.pageTo != null) {
     return formatReadingEntry(entry);
   }
-  return formatDuration(entry.minutes);
+  return formatLoggedDuration(entrySeconds(entry));
 }
 
 function syncActiveDay() {
@@ -744,16 +833,26 @@ function hideTimestampPopup() {
   }
 }
 
-function showTimestampPopup(clientX, clientY, loggedAt) {
+function showTimestampPopup(clientX, clientY, entry) {
   hideTimestampPopup();
 
-  const date = new Date(loggedAt);
-  const label = Number.isNaN(date.getTime()) ? "—" : formatClock24(date);
+  const date = new Date(entry?.loggedAt);
+  const timeLabel = Number.isNaN(date.getTime()) ? "—" : formatClock24(date);
+  const actualLabel = formatExactDuration(entrySeconds(entry));
 
   const popup = document.createElement("div");
   popup.className = "timestamp-popup";
   popup.setAttribute("role", "tooltip");
-  popup.textContent = label;
+
+  const timeEl = document.createElement("div");
+  timeEl.className = "timestamp-popup-time";
+  timeEl.textContent = timeLabel;
+
+  const actualEl = document.createElement("div");
+  actualEl.className = "timestamp-popup-actual";
+  actualEl.textContent = actualLabel;
+
+  popup.append(timeEl, actualEl);
   document.body.appendChild(popup);
 
   const pad = 8;
@@ -841,6 +940,37 @@ function deleteEntryComment(dayKey, rowIndex, entryIndex) {
   renderRows();
 }
 
+function deleteEntry(dayKey, rowIndex, entryIndex) {
+  const rows = state.days[dayKey];
+  if (!rows) return;
+  const row = rows[rowIndex];
+  if (!row || !Array.isArray(row.durations)) return;
+  const entry = row.durations[entryIndex];
+  if (!entry) return;
+
+  if (noteEditingKey) clearNoteEditorState();
+
+  const bookId = typeof entry.bookId === "string" && entry.bookId ? entry.bookId : null;
+  row.durations.splice(entryIndex, 1);
+
+  if (row.durations.length === 0) {
+    rows.splice(rowIndex, 1);
+  }
+  if (rows.length === 0) {
+    delete state.days[dayKey];
+  }
+
+  if (bookId) {
+    recomputeBookBookmark(bookId);
+    if (isReadingCategory()) {
+      prefillPageFrom();
+      updateComposerMode();
+    }
+  }
+
+  renderRows();
+}
+
 function createMenuButton(label, { danger = false, onClick } = {}) {
   const btn = document.createElement("button");
   btn.type = "button";
@@ -873,7 +1003,7 @@ function openDurationMenu(dayKey, rowIndex, entryIndex, clientX, clientY, mode) 
       createMenuButton("Edit", {
         onClick: () => openNoteEditor(dayKey, rowIndex, entryIndex),
       }),
-      createMenuButton("Delete", {
+      createMenuButton("Delete note", {
         danger: true,
         onClick: () => deleteEntryComment(dayKey, rowIndex, entryIndex),
       }),
@@ -882,6 +1012,10 @@ function openDurationMenu(dayKey, rowIndex, entryIndex, clientX, clientY, mode) 
     menu.append(
       createMenuButton("Note", {
         onClick: () => openNoteEditor(dayKey, rowIndex, entryIndex),
+      }),
+      createMenuButton("Delete", {
+        danger: true,
+        onClick: () => deleteEntry(dayKey, rowIndex, entryIndex),
       }),
     );
   }
@@ -1014,18 +1148,26 @@ function onDurationContextMenu(event) {
 function onDurationMouseEnter(event) {
   if (contextMenuEl || noteEditingKey) return;
   const button = event.currentTarget;
-  const loggedAt = button.dataset.loggedAt;
-  if (!loggedAt) return;
-  showTimestampPopup(event.clientX, event.clientY, loggedAt);
+  const dayKey = button.dataset.day;
+  const rowIndex = Number(button.dataset.row);
+  const entryIndex = Number(button.dataset.entry);
+  if (!dayKey || !Number.isInteger(rowIndex) || !Number.isInteger(entryIndex)) return;
+  const entry = getEntry(dayKey, rowIndex, entryIndex);
+  if (!entry) return;
+  showTimestampPopup(event.clientX, event.clientY, entry);
 }
 
 function onDurationMouseMove(event) {
   if (contextMenuEl || noteEditingKey) return;
   if (!timestampPopupEl) return;
   const button = event.currentTarget;
-  const loggedAt = button.dataset.loggedAt;
-  if (!loggedAt) return;
-  showTimestampPopup(event.clientX, event.clientY, loggedAt);
+  const dayKey = button.dataset.day;
+  const rowIndex = Number(button.dataset.row);
+  const entryIndex = Number(button.dataset.entry);
+  if (!dayKey || !Number.isInteger(rowIndex) || !Number.isInteger(entryIndex)) return;
+  const entry = getEntry(dayKey, rowIndex, entryIndex);
+  if (!entry) return;
+  showTimestampPopup(event.clientX, event.clientY, entry);
 }
 
 function onDurationMouseLeave() {
@@ -1155,8 +1297,8 @@ function renderDayTable(dayKey, rows) {
         .join("");
       const totalBlocks = totals
         .map(
-          (total) =>
-            `<div class="total-entry-wrap"><div class="total-line">${escapeHtml(formatDuration(total))}</div></div>`,
+          (totalSeconds) =>
+            `<div class="total-entry-wrap"><div class="total-line">${escapeHtml(formatLoggedDuration(totalSeconds))}</div></div>`,
         )
         .join("");
 
@@ -1341,6 +1483,87 @@ function onDrop(event) {
   renderRows();
 }
 
+function commitDuration(category, totalSeconds) {
+  if (!CATEGORIES.includes(category) || !Number.isFinite(totalSeconds) || totalSeconds < 1) {
+    return false;
+  }
+
+  const seconds = Math.floor(totalSeconds);
+  const minutes = Math.floor(seconds / 60);
+
+  if (category === "Reading") {
+    const book = getActiveBook();
+    if (!book) {
+      categorySelect.value = "Reading";
+      updateComposerMode();
+      openBookDialog("new");
+      return false;
+    }
+
+    const pageFrom = parsePageNumber(pageFromInput.value);
+    const pageTo = parsePageNumber(pageToInput.value);
+
+    if (pageFrom === null) {
+      categorySelect.value = "Reading";
+      updateComposerMode();
+      pageFromInput.setCustomValidity("Enter a start page");
+      pageFromInput.reportValidity();
+      return false;
+    }
+
+    if (pageTo === null) {
+      categorySelect.value = "Reading";
+      updateComposerMode();
+      pageToInput.setCustomValidity("Enter an end page");
+      pageToInput.reportValidity();
+      return false;
+    }
+
+    if (pageFrom > pageTo) {
+      categorySelect.value = "Reading";
+      updateComposerMode();
+      pageToInput.setCustomValidity("End page must be ≥ start");
+      pageToInput.reportValidity();
+      return false;
+    }
+
+    if (pageTo > book.totalPages || pageFrom > book.totalPages) {
+      categorySelect.value = "Reading";
+      updateComposerMode();
+      pageToInput.setCustomValidity(`Book only has ${book.totalPages} pages`);
+      pageToInput.reportValidity();
+      return false;
+    }
+
+    pageToInput.setCustomValidity("");
+    pageFromInput.setCustomValidity("");
+
+    upsertDuration(category, {
+      minutes,
+      seconds,
+      loggedAt: new Date().toISOString(),
+      pageFrom,
+      pageTo,
+      bookId: book.id,
+    });
+    updateActiveBookBookmark(pageTo);
+
+    pageToInput.value = "";
+    prefillPageFrom();
+    updateComposerMode();
+    renderRows();
+    return true;
+  }
+
+  upsertDuration(category, {
+    minutes,
+    seconds,
+    loggedAt: new Date().toISOString(),
+  });
+  renderRows();
+  return true;
+}
+
 function onSubmit(event) {
   event.preventDefault();
 
@@ -1351,79 +1574,18 @@ function onSubmit(event) {
     return;
   }
 
-  const minutes = parseDuration(raw);
-  if (minutes === null) {
+  const seconds = parseDuration(raw);
+  if (seconds === null || seconds < 1) {
     durationInput.setCustomValidity("Couldn’t read that time");
     durationInput.reportValidity();
     return;
   }
   durationInput.setCustomValidity("");
 
-  if (category === "Reading") {
-    const book = getActiveBook();
-    if (!book) {
-      openBookDialog("new");
-      return;
-    }
+  if (!commitDuration(category, seconds)) return;
 
-    const pageFrom = parsePageNumber(pageFromInput.value);
-    const pageTo = parsePageNumber(pageToInput.value);
-
-    if (pageFrom === null) {
-      pageFromInput.setCustomValidity("Enter a start page");
-      pageFromInput.reportValidity();
-      return;
-    }
-
-    if (pageTo === null) {
-      pageToInput.setCustomValidity("Enter an end page");
-      pageToInput.reportValidity();
-      return;
-    }
-
-    if (pageFrom > pageTo) {
-      pageToInput.setCustomValidity("End page must be ≥ start");
-      pageToInput.reportValidity();
-      return;
-    }
-
-    if (pageTo > book.totalPages || pageFrom > book.totalPages) {
-      pageToInput.setCustomValidity(`Book only has ${book.totalPages} pages`);
-      pageToInput.reportValidity();
-      return;
-    }
-
-    pageToInput.setCustomValidity("");
-    pageFromInput.setCustomValidity("");
-
-    const entry = {
-      minutes,
-      loggedAt: new Date().toISOString(),
-      pageFrom,
-      pageTo,
-      bookId: book.id,
-    };
-
-    upsertDuration(category, entry);
-    updateActiveBookBookmark(pageTo);
-
-    durationInput.value = "";
-    pageToInput.value = "";
-    prefillPageFrom();
-
-    updateComposerMode();
-    durationInput.focus();
-    renderRows();
-    return;
-  }
-
-  upsertDuration(category, {
-    minutes,
-    loggedAt: new Date().toISOString(),
-  });
   durationInput.value = "";
   durationInput.focus();
-  renderRows();
 }
 
 function onCategoryChange() {
@@ -1453,6 +1615,18 @@ function onBookDialogSubmit(event) {
 
   closeBookDialog();
   updateComposerMode();
+
+  if (pendingReadingTransferId != null) {
+    const sw = stopwatches[pendingReadingTransferId];
+    pendingReadingTransferId = null;
+    if (sw) {
+      setStopwatchSidebarOpen(true);
+      document.body.classList.add("stopwatch-edge-hot");
+      showReadingTransferFields(sw);
+      return;
+    }
+  }
+
   if (isReadingCategory()) {
     prefillPageFrom();
     durationInput.focus();
@@ -1497,6 +1671,7 @@ bookDialogForm.addEventListener("submit", onBookDialogSubmit);
 
 document.getElementById("book-dialog-cancel").addEventListener("click", () => {
   bookTotalPagesInput.setCustomValidity("");
+  pendingReadingTransferId = null;
   closeBookDialog();
 });
 
@@ -1552,3 +1727,431 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") onPossibleDayChange();
 });
 window.addEventListener("focus", onPossibleDayChange);
+
+/* —— Stopwatch sidebar —— */
+const stopwatchEdge = document.getElementById("stopwatch-edge");
+const stopwatchTab = document.getElementById("stopwatch-tab");
+const stopwatchSidebar = document.getElementById("stopwatch-sidebar");
+
+const stopwatches = [0, 1].map((id) => ({
+  id,
+  elapsedMs: 0,
+  running: false,
+  startedAt: null,
+  intervalId: null,
+  root: document.querySelector(`[data-stopwatch="${id}"]`),
+}));
+
+/** Stopwatch waiting on a new book before showing Reading page fields. */
+let pendingReadingTransferId = null;
+
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+
+function getStopwatchElapsed(sw) {
+  if (!sw.running || sw.startedAt == null) return sw.elapsedMs;
+  return sw.elapsedMs + (Date.now() - sw.startedAt);
+}
+
+/** Whole seconds for transfer (sub-minute allowed; still accumulates). */
+function getStopwatchTransferSeconds(sw) {
+  return Math.floor(getStopwatchElapsed(sw) / 1000);
+}
+
+function renderStopwatch(sw) {
+  const elapsed = getStopwatchElapsed(sw);
+  const totalSeconds = Math.floor(elapsed / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const hoursEl = sw.root.querySelector(".stopwatch-hours");
+  const minutesEl = sw.root.querySelector(".stopwatch-minutes");
+  const secondsEl = sw.root.querySelector(".stopwatch-seconds");
+  const toggleBtn = sw.root.querySelector('[data-action="toggle"]');
+  hoursEl.textContent = pad2(Math.min(hours, 99));
+  minutesEl.textContent = pad2(minutes);
+  secondsEl.textContent = pad2(seconds);
+  toggleBtn.textContent = sw.running ? "Stop" : "Start";
+  toggleBtn.classList.toggle("is-running", sw.running);
+}
+
+function startStopwatch(sw) {
+  if (sw.running) return;
+  sw.running = true;
+  sw.startedAt = Date.now();
+  if (sw.intervalId != null) clearInterval(sw.intervalId);
+  sw.intervalId = setInterval(() => renderStopwatch(sw), 250);
+  renderStopwatch(sw);
+}
+
+function stopStopwatch(sw) {
+  if (!sw.running) return;
+  sw.elapsedMs = getStopwatchElapsed(sw);
+  sw.running = false;
+  sw.startedAt = null;
+  if (sw.intervalId != null) {
+    clearInterval(sw.intervalId);
+    sw.intervalId = null;
+  }
+  renderStopwatch(sw);
+}
+
+function resetStopwatch(sw) {
+  stopStopwatch(sw);
+  sw.elapsedMs = 0;
+  renderStopwatch(sw);
+}
+
+function closeTransferMenus(exceptRoot = null) {
+  for (const sw of stopwatches) {
+    if (!sw.root || sw.root === exceptRoot) continue;
+    const menu = sw.root.querySelector(".stopwatch-transfer-menu");
+    const btn = sw.root.querySelector('[data-action="transfer"]');
+    if (menu) menu.hidden = true;
+    if (btn) btn.setAttribute("aria-expanded", "false");
+  }
+}
+
+function hideStopwatchReadingFields(exceptRoot = null) {
+  for (const sw of stopwatches) {
+    if (!sw.root || sw.root === exceptRoot) continue;
+    const fields = sw.root.querySelector(".stopwatch-reading-fields");
+    if (!fields) continue;
+    fields.hidden = true;
+    fields.querySelectorAll("input").forEach((input) => {
+      input.setCustomValidity("");
+      input.value = "";
+    });
+  }
+}
+
+function getStopwatchPageInputs(sw) {
+  const fields = sw.root.querySelector(".stopwatch-reading-fields");
+  if (!fields) return null;
+  return {
+    fields,
+    pageFrom: fields.querySelector("[data-page-from]"),
+    pageTo: fields.querySelector("[data-page-to]"),
+  };
+}
+
+function showReadingTransferFields(sw) {
+  closeTransferMenus();
+  hideStopwatchReadingFields(sw.root);
+
+  if (!getActiveBook()) {
+    pendingReadingTransferId = sw.id;
+    categorySelect.value = "Reading";
+    updateComposerMode();
+    openBookDialog("new");
+    return;
+  }
+
+  pendingReadingTransferId = null;
+  const inputs = getStopwatchPageInputs(sw);
+  if (!inputs) return;
+
+  inputs.fields.hidden = false;
+  const suggested = suggestedPageFrom(getActiveBook());
+  inputs.pageFrom.value = suggested != null ? String(suggested) : "";
+  inputs.pageTo.value = "";
+  inputs.pageFrom.setCustomValidity("");
+  inputs.pageTo.setCustomValidity("");
+  inputs.pageFrom.focus();
+  if (typeof inputs.pageFrom.select === "function" && inputs.pageFrom.value) {
+    inputs.pageFrom.select();
+  }
+}
+
+function completeReadingTransfer(sw) {
+  if (sw.running) stopStopwatch(sw);
+
+  const seconds = getStopwatchTransferSeconds(sw);
+  if (seconds < 1) {
+    const transferBtn = sw.root.querySelector('[data-action="transfer"]');
+    if (transferBtn) {
+      const prev = transferBtn.textContent;
+      transferBtn.textContent = "Need time";
+      transferBtn.disabled = true;
+      setTimeout(() => {
+        transferBtn.textContent = prev;
+        transferBtn.disabled = false;
+      }, 1200);
+    }
+    return;
+  }
+
+  const inputs = getStopwatchPageInputs(sw);
+  if (!inputs || inputs.fields.hidden) {
+    showReadingTransferFields(sw);
+    return;
+  }
+
+  const book = getActiveBook();
+  if (!book) {
+    openBookDialog("new");
+    return;
+  }
+
+  const pageFrom = parsePageNumber(inputs.pageFrom.value);
+  const pageTo = parsePageNumber(inputs.pageTo.value);
+
+  if (pageFrom === null) {
+    inputs.pageFrom.setCustomValidity("Enter a start page");
+    inputs.pageFrom.reportValidity();
+    inputs.pageFrom.focus();
+    return;
+  }
+  if (pageTo === null) {
+    inputs.pageTo.setCustomValidity("Enter an end page");
+    inputs.pageTo.reportValidity();
+    inputs.pageTo.focus();
+    return;
+  }
+  if (pageFrom > pageTo) {
+    inputs.pageTo.setCustomValidity("End page must be ≥ start");
+    inputs.pageTo.reportValidity();
+    inputs.pageTo.focus();
+    return;
+  }
+  if (pageTo > book.totalPages || pageFrom > book.totalPages) {
+    inputs.pageTo.setCustomValidity(`Book only has ${book.totalPages} pages`);
+    inputs.pageTo.reportValidity();
+    inputs.pageTo.focus();
+    return;
+  }
+
+  inputs.pageFrom.setCustomValidity("");
+  inputs.pageTo.setCustomValidity("");
+
+  // Keep composer page fields in sync for the shared Reading flow.
+  pageFromInput.value = String(pageFrom);
+  pageToInput.value = String(pageTo);
+  categorySelect.value = "Reading";
+  updateComposerMode();
+
+  if (!commitDuration("Reading", seconds)) return;
+
+  hideStopwatchReadingFields();
+  resetStopwatch(sw);
+  closeTransferMenus();
+}
+
+function toggleTransferMenu(sw) {
+  const menu = sw.root.querySelector(".stopwatch-transfer-menu");
+  const btn = sw.root.querySelector('[data-action="transfer"]');
+  if (!menu || !btn) return;
+  const nextOpen = menu.hidden;
+  closeTransferMenus(nextOpen ? sw.root : null);
+  if (nextOpen) hideStopwatchReadingFields();
+  menu.hidden = !nextOpen;
+  btn.setAttribute("aria-expanded", nextOpen ? "true" : "false");
+}
+
+function buildTransferMenus() {
+  for (const sw of stopwatches) {
+    const menu = sw.root.querySelector(".stopwatch-transfer-menu");
+    if (!menu) continue;
+    menu.replaceChildren();
+    for (const category of CATEGORIES) {
+      const option = document.createElement("button");
+      option.type = "button";
+      option.className = "stopwatch-transfer-option";
+      option.setAttribute("role", "menuitem");
+      option.dataset.category = category;
+      option.textContent = category;
+      menu.append(option);
+    }
+  }
+}
+
+function transferStopwatch(sw, category) {
+  if (category === "Reading") {
+    if (sw.running) stopStopwatch(sw);
+    showReadingTransferFields(sw);
+    return;
+  }
+
+  hideStopwatchReadingFields();
+  if (sw.running) stopStopwatch(sw);
+
+  const seconds = getStopwatchTransferSeconds(sw);
+  if (seconds < 1) {
+    closeTransferMenus();
+    const transferBtn = sw.root.querySelector('[data-action="transfer"]');
+    if (transferBtn) {
+      const prev = transferBtn.textContent;
+      transferBtn.textContent = "Need time";
+      transferBtn.disabled = true;
+      setTimeout(() => {
+        transferBtn.textContent = prev;
+        transferBtn.disabled = false;
+      }, 1200);
+    }
+    return;
+  }
+
+  if (!commitDuration(category, seconds)) {
+    closeTransferMenus();
+    return;
+  }
+
+  resetStopwatch(sw);
+  closeTransferMenus();
+}
+
+function onStopwatchPageFromInput(event) {
+  const input = event.currentTarget;
+  input.setCustomValidity("");
+  let value = input.value;
+  const root = input.closest("[data-stopwatch]");
+  const toInput = root?.querySelector("[data-page-to]");
+  if (value.includes("-") && toInput) {
+    input.value = digitsOnly(value.split("-")[0]);
+    toInput.focus();
+    return;
+  }
+  input.value = digitsOnly(value);
+  if (!toInput) return;
+  const book = getActiveBook();
+  if (!book) return;
+  const digits = digitsOnly(input.value);
+  if (isPageNumberComplete(digits, book.totalPages)) {
+    toInput.focus();
+    if (typeof toInput.select === "function") toInput.select();
+  }
+}
+
+function onStopwatchPageToInput(event) {
+  const input = event.currentTarget;
+  input.setCustomValidity("");
+  input.value = digitsOnly(input.value);
+}
+
+function bindStopwatchReadingFields() {
+  for (const sw of stopwatches) {
+    const inputs = getStopwatchPageInputs(sw);
+    if (!inputs) continue;
+
+    inputs.pageFrom.addEventListener("input", onStopwatchPageFromInput);
+    inputs.pageTo.addEventListener("input", onStopwatchPageToInput);
+
+    inputs.pageFrom.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== "-" && event.key !== " ") return;
+      event.preventDefault();
+      inputs.pageFrom.value = digitsOnly(inputs.pageFrom.value);
+      inputs.pageTo.focus();
+    });
+
+    inputs.pageTo.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      completeReadingTransfer(sw);
+    });
+  }
+}
+
+function setStopwatchSidebarOpen(open) {
+  document.body.classList.toggle("stopwatch-open", open);
+  stopwatchSidebar.setAttribute("aria-hidden", open ? "false" : "true");
+  stopwatchTab.setAttribute("aria-expanded", open ? "true" : "false");
+  stopwatchTab.setAttribute(
+    "aria-label",
+    open ? "Close stopwatches" : "Open stopwatches"
+  );
+  if (!open) {
+    closeTransferMenus();
+    hideStopwatchReadingFields();
+  }
+}
+
+function isStopwatchSidebarOpen() {
+  return document.body.classList.contains("stopwatch-open");
+}
+
+stopwatchEdge.addEventListener("mouseenter", () => {
+  document.body.classList.add("stopwatch-edge-hot");
+});
+
+stopwatchEdge.addEventListener("mouseleave", () => {
+  if (!stopwatchTab.matches(":hover") && !isStopwatchSidebarOpen()) {
+    document.body.classList.remove("stopwatch-edge-hot");
+  }
+});
+
+stopwatchTab.addEventListener("mouseenter", () => {
+  document.body.classList.add("stopwatch-edge-hot");
+});
+
+stopwatchTab.addEventListener("mouseleave", () => {
+  if (!stopwatchEdge.matches(":hover") && !isStopwatchSidebarOpen()) {
+    document.body.classList.remove("stopwatch-edge-hot");
+  }
+});
+
+stopwatchTab.addEventListener("click", () => {
+  const next = !isStopwatchSidebarOpen();
+  setStopwatchSidebarOpen(next);
+  if (next) document.body.classList.add("stopwatch-edge-hot");
+  else document.body.classList.remove("stopwatch-edge-hot");
+});
+
+stopwatchSidebar.addEventListener("click", (event) => {
+  const option = event.target.closest(".stopwatch-transfer-option");
+  if (option) {
+    event.preventDefault();
+    event.stopPropagation();
+    const root = option.closest("[data-stopwatch]");
+    const sw = stopwatches[Number(root?.dataset.stopwatch)];
+    if (sw) transferStopwatch(sw, option.dataset.category);
+    return;
+  }
+
+  const btn = event.target.closest("[data-action]");
+  if (!btn) return;
+  const root = btn.closest("[data-stopwatch]");
+  if (!root) return;
+  const sw = stopwatches[Number(root.dataset.stopwatch)];
+  if (!sw) return;
+  if (btn.dataset.action === "toggle") {
+    if (sw.running) stopStopwatch(sw);
+    else startStopwatch(sw);
+  } else if (btn.dataset.action === "reset") {
+    resetStopwatch(sw);
+  } else if (btn.dataset.action === "transfer") {
+    event.stopPropagation();
+    toggleTransferMenu(sw);
+  }
+});
+
+document.addEventListener("click", (event) => {
+  if (event.target.closest(".stopwatch-transfer")) return;
+  if (event.target.closest(".stopwatch-sidebar")) return;
+  closeTransferMenus();
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && isStopwatchSidebarOpen()) {
+    const anyMenuOpen = stopwatches.some(
+      (sw) => !sw.root.querySelector(".stopwatch-transfer-menu")?.hidden
+    );
+    const anyReadingFields = stopwatches.some(
+      (sw) => !sw.root.querySelector(".stopwatch-reading-fields")?.hidden
+    );
+    if (anyMenuOpen) {
+      closeTransferMenus();
+      return;
+    }
+    if (anyReadingFields) {
+      hideStopwatchReadingFields();
+      return;
+    }
+    setStopwatchSidebarOpen(false);
+    document.body.classList.remove("stopwatch-edge-hot");
+  }
+});
+
+buildTransferMenus();
+bindStopwatchReadingFields();
+stopwatches.forEach(renderStopwatch);

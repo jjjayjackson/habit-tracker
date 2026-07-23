@@ -44,7 +44,7 @@
             class="composer-input"
             name="duration"
             type="text"
-            placeholder="1 13 · 45m · 1h 30m"
+            placeholder="1 13 · 45m · 2s · 1h 30m"
             required
           />
 
@@ -107,6 +107,123 @@
         </form>
       </dialog>
     </main>
+
+    <div id="stopwatch-edge" class="stopwatch-edge" aria-hidden="true"></div>
+    <button
+      type="button"
+      id="stopwatch-tab"
+      class="stopwatch-tab"
+      aria-expanded="false"
+      aria-controls="stopwatch-sidebar"
+      aria-label="Open stopwatches"
+    >
+      <span class="stopwatch-tab-label">Timers</span>
+    </button>
+
+    <aside
+      id="stopwatch-sidebar"
+      class="stopwatch-sidebar"
+      aria-hidden="true"
+      aria-label="Stopwatches"
+    >
+      <div class="stopwatch" data-stopwatch="0">
+        <div class="stopwatch-display" aria-live="polite">
+          <span class="stopwatch-hours">00</span>
+          <span class="stopwatch-sep" aria-hidden="true">:</span>
+          <span class="stopwatch-minutes">00</span>
+          <span class="stopwatch-sep" aria-hidden="true">:</span>
+          <span class="stopwatch-seconds">00</span>
+        </div>
+        <div class="stopwatch-actions">
+          <button type="button" class="stopwatch-btn" data-action="toggle">Start</button>
+          <button type="button" class="stopwatch-btn" data-action="reset">Reset</button>
+        </div>
+        <div class="stopwatch-transfer">
+          <button
+            type="button"
+            class="stopwatch-btn stopwatch-transfer-btn"
+            data-action="transfer"
+            aria-haspopup="menu"
+            aria-expanded="false"
+          >
+            Transfer
+          </button>
+          <div class="stopwatch-transfer-menu" role="menu" hidden></div>
+          <div class="stopwatch-reading-fields" hidden>
+            <label class="sr-only" for="sw-0-page-from">Page from</label>
+            <input
+              id="sw-0-page-from"
+              class="composer-input page-input stopwatch-page-input"
+              type="text"
+              inputmode="numeric"
+              placeholder="from"
+              autocomplete="off"
+              data-page-from
+            />
+            <span class="page-range-sep" aria-hidden="true">–</span>
+            <label class="sr-only" for="sw-0-page-to">Page to</label>
+            <input
+              id="sw-0-page-to"
+              class="composer-input page-input stopwatch-page-input"
+              type="text"
+              inputmode="numeric"
+              placeholder="to"
+              autocomplete="off"
+              data-page-to
+            />
+          </div>
+        </div>
+      </div>
+
+      <div class="stopwatch" data-stopwatch="1">
+        <div class="stopwatch-display" aria-live="polite">
+          <span class="stopwatch-hours">00</span>
+          <span class="stopwatch-sep" aria-hidden="true">:</span>
+          <span class="stopwatch-minutes">00</span>
+          <span class="stopwatch-sep" aria-hidden="true">:</span>
+          <span class="stopwatch-seconds">00</span>
+        </div>
+        <div class="stopwatch-actions">
+          <button type="button" class="stopwatch-btn" data-action="toggle">Start</button>
+          <button type="button" class="stopwatch-btn" data-action="reset">Reset</button>
+        </div>
+        <div class="stopwatch-transfer">
+          <button
+            type="button"
+            class="stopwatch-btn stopwatch-transfer-btn"
+            data-action="transfer"
+            aria-haspopup="menu"
+            aria-expanded="false"
+          >
+            Transfer
+          </button>
+          <div class="stopwatch-transfer-menu" role="menu" hidden></div>
+          <div class="stopwatch-reading-fields" hidden>
+            <label class="sr-only" for="sw-1-page-from">Page from</label>
+            <input
+              id="sw-1-page-from"
+              class="composer-input page-input stopwatch-page-input"
+              type="text"
+              inputmode="numeric"
+              placeholder="from"
+              autocomplete="off"
+              data-page-from
+            />
+            <span class="page-range-sep" aria-hidden="true">–</span>
+            <label class="sr-only" for="sw-1-page-to">Page to</label>
+            <input
+              id="sw-1-page-to"
+              class="composer-input page-input stopwatch-page-input"
+              type="text"
+              inputmode="numeric"
+              placeholder="to"
+              autocomplete="off"
+              data-page-to
+            />
+          </div>
+        </div>
+      </div>
+    </aside>
 
     <script src="script.js"></script>
   </body>
