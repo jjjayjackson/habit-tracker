@@ -1827,6 +1827,8 @@ const stopwatches = [0, 1].map((id) => ({
   root: document.querySelector(`[data-stopwatch="${id}"]`),
 }));
 
+const DEFAULT_DOCUMENT_TITLE = document.title || "Daily Log";
+
 /** Stopwatch waiting on a new book before showing Reading page fields. */
 let pendingReadingTransferId = null;
 
@@ -2004,21 +2006,37 @@ function restoreStopwatches() {
   }
 }
 
-function renderStopwatch(sw) {
+function formatStopwatchTime(sw) {
   const elapsed = getStopwatchElapsed(sw);
   const totalSeconds = Math.floor(elapsed / 1000);
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
+  return `${pad2(Math.min(hours, 99))}:${pad2(minutes)}:${pad2(seconds)}`;
+}
+
+function updateDocumentTitleFromStopwatches() {
+  const runningTimes = stopwatches
+    .filter((sw) => sw.running)
+    .map((sw) => formatStopwatchTime(sw));
+  document.title = runningTimes.length
+    ? `${DEFAULT_DOCUMENT_TITLE} · ${runningTimes.join(" · ")}`
+    : DEFAULT_DOCUMENT_TITLE;
+}
+
+function renderStopwatch(sw) {
+  const time = formatStopwatchTime(sw);
+  const [hours, minutes, seconds] = time.split(":");
   const hoursEl = sw.root.querySelector(".stopwatch-hours");
   const minutesEl = sw.root.querySelector(".stopwatch-minutes");
   const secondsEl = sw.root.querySelector(".stopwatch-seconds");
   const toggleBtn = sw.root.querySelector('[data-action="toggle"]');
-  hoursEl.textContent = pad2(Math.min(hours, 99));
-  minutesEl.textContent = pad2(minutes);
-  secondsEl.textContent = pad2(seconds);
+  hoursEl.textContent = hours;
+  minutesEl.textContent = minutes;
+  secondsEl.textContent = seconds;
   toggleBtn.textContent = sw.running ? "Stop" : "Start";
   toggleBtn.classList.toggle("is-running", sw.running);
+  updateDocumentTitleFromStopwatches();
 }
 
 function startStopwatch(sw) {
