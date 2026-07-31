@@ -13,6 +13,19 @@ const STOPWATCHES_STORAGE_KEY = "habit-tracker-mvp:stopwatches";
 const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 /** Open next-book URL once when finished pages ÷ total ≥ this (0.8 = 80%). */
 const NEXT_BOOK_OPEN_THRESHOLD = 0.8;
+const PERSIST_DEBOUNCE_MS = 400;
+
+const supabase = window.supabase.createClient(
+  window.HABIT_SUPABASE.url,
+  window.HABIT_SUPABASE.anonKey,
+);
+
+let daysPersistTimer = null;
+let booksPersistTimer = null;
+let stopwatchesPersistTimer = null;
+let daysPersistChain = Promise.resolve();
+let booksPersistChain = Promise.resolve();
+let stopwatchesPersistChain = Promise.resolve();
 
 const state = {
   days: {},
@@ -434,7 +447,7 @@ function normalizeBooksState(raw) {
   };
 }
 
-function loadBooks() {
+function loadBooksFromLocal() {
   try {
     const raw = localStorage.getItem(BOOKS_STORAGE_KEY);
     if (!raw) return emptyBooksState();
@@ -444,8 +457,123 @@ function loadBooks() {
   }
 }
 
+function writeBooksLocal(booksState = state.books) {
+  localStorage.setItem(BOOKS_STORAGE_KEY, JSON.stringify(booksState));
+}
+
+function bookRowFromState(book) {
+  return {
+    id: book.id,
+    title: book.title || "",
+    total_pages: book.totalPages,
+    last_finished_page: book.lastFinishedPage,
+    status: book.status,
+    purchase_opened: book.purchaseOpened === true,
+  };
+}
+
+function bookFromRow(row) {
+  return normalizeBook({
+    id: row.id,
+    title: row.title,
+    totalPages: row.total_pages,
+    lastFinishedPage: row.last_finished_page,
+    status: row.status,
+    purchaseOpened: row.purchase_opened,
+  });
+}
+
+async function loadBooksFromSupabase() {
+  const [{ data: bookRows, error: booksError }, { data: settings, error: settingsError }] =
+    await Promise.all([
+      supabase.from("books").select("*").order("created_at", { ascending: true }),
+      supabase.from("reading_settings").select("*").eq("id", 1).maybeSingle(),
+    ]);
+
+  if (booksError) throw booksError;
+  if (settingsError) throw settingsError;
+
+  const books = (bookRows || []).map(bookFromRow).filter(Boolean);
+  const customizedSettings =
+    !!settings &&
+    (!!settings.active_book_id ||
+      !!(settings.next_book_url && String(settings.next_book_url).trim()) ||
+      (Array.isArray(settings.threshold_history) &&
+        settings.threshold_history.length > 0) ||
+      (typeof settings.open_threshold === "number" &&
+        settings.open_threshold !== NEXT_BOOK_OPEN_THRESHOLD));
+
+  // Empty seeded settings row alone does not count as remote data.
+  if (books.length === 0 && !customizedSettings) return null;
+
+  return normalizeBooksState({
+    activeBookId: settings?.active_book_id ?? null,
+    books,
+    nextBookUrl: settings?.next_book_url ?? "",
+    openThreshold: settings?.open_threshold ?? NEXT_BOOK_OPEN_THRESHOLD,
+    thresholdHistory: settings?.threshold_history ?? [],
+  });
+}
+
+async function loadBooks() {
+  try {
+    const remote = await loadBooksFromSupabase();
+    if (remote) {
+      writeBooksLocal(remote);
+      return remote;
+    }
+  } catch (err) {
+    console.error("Failed to load books from Supabase:", err);
+  }
+  return loadBooksFromLocal();
+}
+
+async function persistBooksToSupabase(booksState = state.books) {
+  const desiredIds = new Set(booksState.books.map((b) => b.id));
+  const { data: existing, error: existingError } = await supabase
+    .from("books")
+    .select("id");
+  if (existingError) throw existingError;
+
+  const toDelete = (existing || [])
+    .map((row) => row.id)
+    .filter((id) => !desiredIds.has(id));
+  if (toDelete.length > 0) {
+    const { error: deleteError } = await supabase
+      .from("books")
+      .delete()
+      .in("id", toDelete);
+    if (deleteError) throw deleteError;
+  }
+
+  if (booksState.books.length > 0) {
+    const { error: upsertError } = await supabase
+      .from("books")
+      .upsert(booksState.books.map(bookRowFromState));
+    if (upsertError) throw upsertError;
+  }
+
+  const { error: settingsError } = await supabase.from("reading_settings").upsert({
+    id: 1,
+    active_book_id: booksState.activeBookId,
+    next_book_url: booksState.nextBookUrl || "",
+    open_threshold: booksState.openThreshold,
+    threshold_history: booksState.thresholdHistory || [],
+    updated_at: new Date().toISOString(),
+  });
+  if (settingsError) throw settingsError;
+}
+
 function saveBooks() {
-  localStorage.setItem(BOOKS_STORAGE_KEY, JSON.stringify(state.books));
+  writeBooksLocal();
+  if (booksPersistTimer) clearTimeout(booksPersistTimer);
+  booksPersistTimer = setTimeout(() => {
+    booksPersistTimer = null;
+    const snapshot = structuredClone(state.books);
+    booksPersistChain = booksPersistChain
+      .then(() => persistBooksToSupabase(snapshot))
+      .catch((err) => console.error("Failed to save books to Supabase:", err));
+  }, PERSIST_DEBOUNCE_MS);
 }
 
 function getActiveBook() {
@@ -698,7 +826,7 @@ function renameDay(fromKey, toKey) {
   return true;
 }
 
-function loadDays() {
+function loadDaysFromLocal() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return {};
@@ -723,12 +851,101 @@ function loadDays() {
   }
 }
 
-function saveDays() {
+function daysPayload(days = state.days) {
   const toSave = {};
-  for (const key of sortedDayKeys(state.days)) {
-    toSave[key] = state.days[key];
+  for (const key of sortedDayKeys(days)) {
+    toSave[key] = days[key];
   }
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
+  return toSave;
+}
+
+function writeDaysLocal(days = state.days) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(daysPayload(days)));
+}
+
+async function loadDaysFromSupabase() {
+  const { data, error } = await supabase
+    .from("habit_log_days")
+    .select("day_key, rows");
+  if (error) throw error;
+  if (!data || data.length === 0) return null;
+
+  const days = {};
+  for (const row of data) {
+    const key =
+      typeof row.day_key === "string"
+        ? row.day_key.slice(0, 10)
+        : String(row.day_key).slice(0, 10);
+    if (!DAY_KEY_RE.test(key)) continue;
+    const rows = normalizeDayRows(row.rows);
+    if (rows.length > 0) days[key] = rows;
+  }
+  return days;
+}
+
+async function loadDays() {
+  try {
+    const remote = await loadDaysFromSupabase();
+    if (remote) {
+      writeDaysLocal(remote);
+      return remote;
+    }
+  } catch (err) {
+    console.error("Failed to load days from Supabase:", err);
+  }
+  return loadDaysFromLocal();
+}
+
+async function persistDaysToSupabase(days = state.days) {
+  const payload = daysPayload(days);
+  const keepKeys = Object.keys(payload);
+
+  const { data: existing, error: existingError } = await supabase
+    .from("habit_log_days")
+    .select("day_key");
+  if (existingError) throw existingError;
+
+  const keep = new Set(keepKeys);
+  const toDelete = (existing || [])
+    .map((row) =>
+      typeof row.day_key === "string"
+        ? row.day_key.slice(0, 10)
+        : String(row.day_key).slice(0, 10),
+    )
+    .filter((key) => !keep.has(key));
+
+  if (toDelete.length > 0) {
+    const { error: deleteError } = await supabase
+      .from("habit_log_days")
+      .delete()
+      .in("day_key", toDelete);
+    if (deleteError) throw deleteError;
+  }
+
+  if (keepKeys.length === 0) return;
+
+  const now = new Date().toISOString();
+  const rows = keepKeys.map((day_key) => ({
+    day_key,
+    rows: payload[day_key],
+    updated_at: now,
+  }));
+  const { error: upsertError } = await supabase
+    .from("habit_log_days")
+    .upsert(rows);
+  if (upsertError) throw upsertError;
+}
+
+function saveDays() {
+  writeDaysLocal();
+  if (daysPersistTimer) clearTimeout(daysPersistTimer);
+  daysPersistTimer = setTimeout(() => {
+    daysPersistTimer = null;
+    const snapshot = structuredClone(daysPayload());
+    daysPersistChain = daysPersistChain
+      .then(() => persistDaysToSupabase(snapshot))
+      .catch((err) => console.error("Failed to save days to Supabase:", err));
+  }, PERSIST_DEBOUNCE_MS);
 }
 
 function upsertDuration(category, entry) {
@@ -1783,16 +2000,9 @@ window.addEventListener("resize", () => {
   syncEntryHeights();
 });
 
-state.days = loadDays();
-state.books = loadBooks();
+state.days = {};
+state.books = emptyBooksState();
 activeDayKey = localDayKey();
-saveDays(); // persist migration from legacy flat array if needed
-renderRows();
-updateComposerMode();
-if (isReadingCategory() && getActiveBook()) {
-  prefillPageFrom();
-}
-durationInput.focus();
 
 function onPossibleDayChange() {
   if (!syncActiveDay()) return;
@@ -1957,16 +2167,34 @@ function getStopwatchTransferSeconds(sw) {
   return Math.floor(getStopwatchElapsed(sw) / 1000);
 }
 
-function saveStopwatches() {
-  const payload = stopwatches.map((sw) => ({
+function writeStopwatchesLocal(payload) {
+  localStorage.setItem(STOPWATCHES_STORAGE_KEY, JSON.stringify(payload));
+}
+
+function stopwatchesPayload() {
+  return stopwatches.map((sw) => ({
     elapsedMs: sw.elapsedMs,
     running: sw.running,
     startedAt: sw.running ? sw.startedAt : null,
   }));
-  localStorage.setItem(STOPWATCHES_STORAGE_KEY, JSON.stringify(payload));
 }
 
-function loadStopwatches() {
+function saveStopwatches() {
+  const payload = stopwatchesPayload();
+  writeStopwatchesLocal(payload);
+  if (stopwatchesPersistTimer) clearTimeout(stopwatchesPersistTimer);
+  stopwatchesPersistTimer = setTimeout(() => {
+    stopwatchesPersistTimer = null;
+    const snapshot = structuredClone(payload);
+    stopwatchesPersistChain = stopwatchesPersistChain
+      .then(() => persistStopwatchesToSupabase(snapshot))
+      .catch((err) =>
+        console.error("Failed to save stopwatches to Supabase:", err),
+      );
+  }, PERSIST_DEBOUNCE_MS);
+}
+
+function loadStopwatchesFromLocal() {
   try {
     const raw = localStorage.getItem(STOPWATCHES_STORAGE_KEY);
     if (!raw) return null;
@@ -1978,13 +2206,72 @@ function loadStopwatches() {
   }
 }
 
-function tickStopwatch(sw) {
-  if (sw.intervalId != null) clearInterval(sw.intervalId);
-  sw.intervalId = setInterval(() => renderStopwatch(sw), 250);
+async function loadStopwatchesFromSupabase() {
+  const { data, error } = await supabase
+    .from("stopwatches")
+    .select("id, elapsed_ms, running, started_at")
+    .order("id", { ascending: true });
+  if (error) throw error;
+  if (!data || data.length === 0) return null;
+
+  const hasState = data.some(
+    (row) =>
+      Number(row.elapsed_ms) > 0 ||
+      row.running === true ||
+      row.started_at != null,
+  );
+  if (!hasState) return null;
+
+  const maxId = Math.max(...data.map((row) => Number(row.id)), 0);
+  const payload = Array.from({ length: maxId + 1 }, () => ({
+    elapsedMs: 0,
+    running: false,
+    startedAt: null,
+  }));
+  for (const row of data) {
+    const id = Number(row.id);
+    if (!Number.isInteger(id) || id < 0) continue;
+    payload[id] = {
+      elapsedMs: Number(row.elapsed_ms) || 0,
+      running: row.running === true,
+      startedAt: row.started_at == null ? null : Number(row.started_at),
+    };
+  }
+  return payload;
 }
 
-function restoreStopwatches() {
-  const saved = loadStopwatches();
+async function loadStopwatches() {
+  try {
+    const remote = await loadStopwatchesFromSupabase();
+    if (remote) {
+      writeStopwatchesLocal(remote);
+      return remote;
+    }
+  } catch (err) {
+    console.error("Failed to load stopwatches from Supabase:", err);
+  }
+  return loadStopwatchesFromLocal();
+}
+
+async function persistStopwatchesToSupabase(payload) {
+  if (!Array.isArray(payload)) return;
+  const now = new Date().toISOString();
+  const rows = payload.map((entry, id) => ({
+    id,
+    elapsed_ms: Number(entry?.elapsedMs) || 0,
+    running: entry?.running === true,
+    started_at:
+      entry?.running === true && Number.isFinite(Number(entry?.startedAt))
+        ? Number(entry.startedAt)
+        : null,
+    updated_at: now,
+  }));
+  const { error } = await supabase.from("stopwatches").upsert(rows);
+  if (error) throw error;
+}
+
+async function restoreStopwatches() {
+  const saved = await loadStopwatches();
   if (!saved) return;
 
   for (const sw of stopwatches) {
@@ -2004,6 +2291,11 @@ function restoreStopwatches() {
       sw.startedAt = null;
     }
   }
+}
+
+function tickStopwatch(sw) {
+  if (sw.intervalId != null) clearInterval(sw.intervalId);
+  sw.intervalId = setInterval(() => renderStopwatch(sw), 250);
 }
 
 function formatStopwatchTime(sw) {
@@ -2447,5 +2739,126 @@ bindStopwatchReadingFields();
 syncNextBookUrlInput();
 syncOpenThresholdInput();
 renderThresholdHistory();
-restoreStopwatches();
 stopwatches.forEach(renderStopwatch);
+
+async function flushAllPendingPersists() {
+  if (daysPersistTimer) {
+    clearTimeout(daysPersistTimer);
+    daysPersistTimer = null;
+    const snapshot = structuredClone(daysPayload());
+    daysPersistChain = daysPersistChain
+      .then(() => persistDaysToSupabase(snapshot))
+      .catch((err) => console.error("Failed to save days to Supabase:", err));
+  }
+  if (booksPersistTimer) {
+    clearTimeout(booksPersistTimer);
+    booksPersistTimer = null;
+    const snapshot = structuredClone(state.books);
+    booksPersistChain = booksPersistChain
+      .then(() => persistBooksToSupabase(snapshot))
+      .catch((err) => console.error("Failed to save books to Supabase:", err));
+  }
+  if (stopwatchesPersistTimer) {
+    clearTimeout(stopwatchesPersistTimer);
+    stopwatchesPersistTimer = null;
+    const snapshot = structuredClone(stopwatchesPayload());
+    stopwatchesPersistChain = stopwatchesPersistChain
+      .then(() => persistStopwatchesToSupabase(snapshot))
+      .catch((err) =>
+        console.error("Failed to save stopwatches to Supabase:", err),
+      );
+  }
+  await Promise.all([
+    daysPersistChain,
+    booksPersistChain,
+    stopwatchesPersistChain,
+  ]);
+}
+
+async function remoteHasHabitData() {
+  const [{ count: dayCount, error: dayError }, { count: bookCount, error: bookError }] =
+    await Promise.all([
+      supabase
+        .from("habit_log_days")
+        .select("day_key", { count: "exact", head: true }),
+      supabase.from("books").select("id", { count: "exact", head: true }),
+    ]);
+  if (dayError) throw dayError;
+  if (bookError) throw bookError;
+  return (dayCount || 0) > 0 || (bookCount || 0) > 0;
+}
+
+async function migrateFromLocalStorageIfNeeded() {
+  const localDays = loadDaysFromLocal();
+  const localBooks = loadBooksFromLocal();
+  const localStopwatches = loadStopwatchesFromLocal();
+  const hasLocal =
+    Object.keys(localDays).length > 0 ||
+    localBooks.books.length > 0 ||
+    (Array.isArray(localStopwatches) &&
+      localStopwatches.some(
+        (entry) =>
+          entry &&
+          (Number(entry.elapsedMs) > 0 ||
+            entry.running === true ||
+            entry.startedAt != null),
+      ));
+
+  if (!hasLocal) return;
+  if (await remoteHasHabitData()) return;
+
+  console.info("Migrating localStorage → Supabase…");
+  state.days = localDays;
+  state.books = localBooks;
+  await persistDaysToSupabase(localDays);
+  await persistBooksToSupabase(localBooks);
+  if (Array.isArray(localStopwatches)) {
+    await persistStopwatchesToSupabase(localStopwatches);
+  }
+  console.info("Migration complete.");
+}
+
+async function boot() {
+  try {
+    await migrateFromLocalStorageIfNeeded();
+  } catch (err) {
+    console.error("Migration failed:", err);
+  }
+
+  state.days = await loadDays();
+  state.books = await loadBooks();
+  activeDayKey = localDayKey();
+  // Persist any legacy flat-array reshape still sitting in memory/local.
+  writeDaysLocal();
+  if (Object.keys(daysPayload()).length > 0) {
+    daysPersistChain = daysPersistChain
+      .then(() => persistDaysToSupabase(daysPayload()))
+      .catch((err) => console.error("Failed to save days to Supabase:", err));
+  }
+
+  renderRows();
+  updateComposerMode();
+  if (isReadingCategory() && getActiveBook()) {
+    prefillPageFrom();
+  }
+  syncNextBookUrlInput();
+  syncOpenThresholdInput();
+  renderThresholdHistory();
+  await restoreStopwatches();
+  stopwatches.forEach(renderStopwatch);
+  durationInput.focus();
+}
+
+window.addEventListener("beforeunload", () => {
+  // Best-effort: kick off pending writes (may not finish if the tab dies).
+  void flushAllPendingPersists();
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") {
+    void flushAllPendingPersists();
+  }
+});
+
+boot();
+
