@@ -18,6 +18,20 @@ const PERSIST_DEBOUNCE_MS = 400;
 const supabase = window.supabase.createClient(
   window.HABIT_SUPABASE.url,
   window.HABIT_SUPABASE.anonKey,
+  {
+    // No auth in this MVP — skip session storage so Tracking Prevention
+    // (Safari/Edge) can't block the client when the library is third-party.
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+      storage: {
+        getItem: () => null,
+        setItem: () => {},
+        removeItem: () => {},
+      },
+    },
+  },
 );
 
 let daysPersistTimer = null;
