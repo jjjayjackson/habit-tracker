@@ -22,10 +22,6 @@
   --side-tab-width: 2.35rem;
   --side-panel-width: 12.5rem;
   --side-rail-width: calc(var(--side-tab-width) + var(--side-panel-width));
-  --side-open-offset: 0px;
-}
-
-body.side-open {
   --side-open-offset: var(--side-rail-width);
 }
 
@@ -60,7 +56,6 @@ body {
   flex-direction: column;
   padding: 1.5rem 1.5rem 6.5rem;
   padding-right: calc(1.5rem + var(--side-open-offset));
-  transition: padding-right 0.22s ease;
 }
 
 .log {
@@ -380,7 +375,6 @@ body {
   border: 1px solid var(--composer-border);
   border-radius: 0.9rem;
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
-  transition: left 0.22s ease, width 0.22s ease;
 }
 
 .reading-progress {
@@ -460,7 +454,6 @@ body {
   display: grid;
   grid-template-columns: minmax(150px, 220px) 1fr auto;
   gap: 0.55rem;
-  transition: left 0.22s ease, width 0.22s ease;
   align-items: center;
   padding: 0.55rem;
   background: var(--composer-bg);
@@ -611,63 +604,7 @@ body {
   gap: 0.45rem;
 }
 
-/* —— Right-edge hideable tool rail —— */
-.side-edge {
-  position: fixed;
-  top: 0;
-  right: 0;
-  width: 18px;
-  height: 100vh;
-  z-index: 40;
-}
-
-.side-bookmark {
-  position: fixed;
-  top: 50%;
-  right: 0;
-  z-index: 42;
-  transform: translate(100%, -50%);
-  margin: 0;
-  padding: 0.85rem 0.35rem;
-  border: 1px solid var(--composer-border);
-  border-right: 0;
-  border-radius: 0.55rem 0 0 0.55rem;
-  background: var(--composer-bg);
-  color: var(--muted);
-  font: inherit;
-  font-size: 0.72rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  cursor: pointer;
-  transition: transform 0.2s ease, color 0.15s ease, background 0.15s ease;
-}
-
-.side-bookmark-label {
-  writing-mode: vertical-rl;
-  transform: rotate(180deg);
-  display: inline-block;
-}
-
-body.side-edge-hot .side-bookmark,
-.side-bookmark:focus-visible {
-  transform: translate(0, -50%);
-}
-
-body.side-open .side-bookmark {
-  display: none;
-}
-
-.side-bookmark:hover,
-.side-bookmark:focus-visible {
-  color: var(--fg);
-  background: var(--composer-hover);
-}
-
-.side-bookmark:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
-}
-
+/* —— Permanent right-side tool rail —— */
 .side-rail {
   position: fixed;
   top: 0;
@@ -678,14 +615,6 @@ body.side-open .side-bookmark {
   height: 100vh;
   background: #0a0a0a;
   border-left: 1px solid var(--composer-border);
-  transform: translateX(100%);
-  transition: transform 0.22s ease;
-  pointer-events: none;
-}
-
-body.side-open .side-rail {
-  transform: translateX(0);
-  pointer-events: auto;
 }
 
 .side-panels {
@@ -695,35 +624,6 @@ body.side-open .side-rail {
   height: 100%;
   display: flex;
   flex-direction: column;
-}
-
-.side-panel-toolbar {
-  flex: 0 0 auto;
-  display: flex;
-  justify-content: flex-start;
-  padding: 0.65rem 0.75rem 0;
-}
-
-.side-close {
-  margin: 0;
-  padding: 0.3rem 0.55rem;
-  border: 1px solid var(--composer-border);
-  border-radius: 0.45rem;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 0.72rem;
-  cursor: pointer;
-}
-
-.side-close:hover {
-  color: var(--fg);
-  background: var(--composer-hover);
-}
-
-.side-close:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
 }
 
 .side-panel {

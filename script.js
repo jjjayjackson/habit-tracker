@@ -1926,9 +1926,7 @@ function onBookDialogSubmit(event) {
     const sw = stopwatches[pendingReadingTransferId];
     pendingReadingTransferId = null;
     if (sw) {
-      setSideRailOpen(true);
       setActiveSideTab("timers");
-      document.body.classList.add("side-edge-hot");
       showReadingTransferFields(sw);
       return;
     }
@@ -2028,11 +2026,7 @@ document.addEventListener("visibilitychange", () => {
 });
 window.addEventListener("focus", onPossibleDayChange);
 
-/* —— Right-edge tool rail + stopwatches —— */
-const sideEdge = document.getElementById("side-edge");
-const sideBookmark = document.getElementById("side-bookmark");
-const sideRail = document.getElementById("side-rail");
-const sideClose = document.getElementById("side-close");
+/* —— Right-side tool rail + stopwatches —— */
 const sideTabs = document.querySelectorAll(".side-tab");
 const sidePanels = document.querySelectorAll(".side-panel");
 const timersPanel = document.getElementById("panel-timers");
@@ -2055,21 +2049,6 @@ const DEFAULT_DOCUMENT_TITLE = document.title || "Daily Log";
 
 /** Stopwatch waiting on a new book before showing Reading page fields. */
 let pendingReadingTransferId = null;
-
-function isSideRailOpen() {
-  return document.body.classList.contains("side-open");
-}
-
-function setSideRailOpen(open) {
-  document.body.classList.toggle("side-open", open);
-  sideRail.setAttribute("aria-hidden", open ? "false" : "true");
-  sideBookmark.setAttribute("aria-expanded", open ? "true" : "false");
-  sideBookmark.setAttribute("aria-label", open ? "Close tools" : "Open tools");
-  if (!open) {
-    closeTransferMenus();
-    hideStopwatchReadingFields();
-  }
-}
 
 function setActiveSideTab(tabId) {
   for (const tab of sideTabs) {
@@ -2660,38 +2639,6 @@ if (openThresholdUpdateBtn) {
   });
 }
 
-sideEdge.addEventListener("mouseenter", () => {
-  document.body.classList.add("side-edge-hot");
-});
-
-sideEdge.addEventListener("mouseleave", () => {
-  if (!sideBookmark.matches(":hover") && !isSideRailOpen()) {
-    document.body.classList.remove("side-edge-hot");
-  }
-});
-
-sideBookmark.addEventListener("mouseenter", () => {
-  document.body.classList.add("side-edge-hot");
-});
-
-sideBookmark.addEventListener("mouseleave", () => {
-  if (!sideEdge.matches(":hover") && !isSideRailOpen()) {
-    document.body.classList.remove("side-edge-hot");
-  }
-});
-
-sideBookmark.addEventListener("click", () => {
-  setSideRailOpen(true);
-  document.body.classList.add("side-edge-hot");
-});
-
-if (sideClose) {
-  sideClose.addEventListener("click", () => {
-    setSideRailOpen(false);
-    document.body.classList.remove("side-edge-hot");
-  });
-}
-
 if (timersPanel) {
   timersPanel.addEventListener("click", (event) => {
     const option = event.target.closest(".stopwatch-transfer-option");
@@ -2729,7 +2676,7 @@ document.addEventListener("click", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
-  if (event.key !== "Escape" || !isSideRailOpen()) return;
+  if (event.key !== "Escape") return;
   const anyMenuOpen = stopwatches.some(
     (sw) => !sw.root.querySelector(".stopwatch-transfer-menu")?.hidden
   );
@@ -2742,10 +2689,7 @@ document.addEventListener("keydown", (event) => {
   }
   if (anyReadingFields) {
     hideStopwatchReadingFields();
-    return;
   }
-  setSideRailOpen(false);
-  document.body.classList.remove("side-edge-hot");
 });
 
 buildTransferMenus();
