@@ -2030,20 +2030,26 @@ window.addEventListener("focus", onPossibleDayChange);
 const sideTabs = document.querySelectorAll(".side-tab");
 const sidePanels = document.querySelectorAll(".side-panel");
 const timersPanel = document.getElementById("panel-timers");
+const stopwatchListEl = document.getElementById("stopwatch-list");
+const stopwatchAddBtn = document.getElementById("stopwatch-add");
+const stopwatchRemoveBtn = document.getElementById("stopwatch-remove");
+const stopwatchAdjustMinutes = document.getElementById("stopwatch-adjust-minutes");
+const stopwatchAdjustSeconds = document.getElementById("stopwatch-adjust-seconds");
+const stopwatchAdjustPicker = document.getElementById("stopwatch-adjust-picker");
 const nextBookUrlInput = document.getElementById("next-book-url");
 const nextBookPasteBtn = document.getElementById("next-book-paste");
 const openThresholdInput = document.getElementById("open-threshold-input");
 const openThresholdUpdateBtn = document.getElementById("open-threshold-update");
 const thresholdHistoryEl = document.getElementById("threshold-history");
 
-const stopwatches = [0, 1].map((id) => ({
-  id,
-  elapsedMs: 0,
-  running: false,
-  startedAt: null,
-  intervalId: null,
-  root: document.querySelector(`[data-stopwatch="${id}"]`),
-}));
+const MIN_STOPWATCHES = 1;
+const MAX_STOPWATCHES = 4;
+
+/** @type {{ id: number, elapsedMs: number, running: boolean, startedAt: number|null, intervalId: number|null, root: HTMLElement }[]} */
+let stopwatches = [];
+
+/** Pending time adjust: positive = add, negative = subtract (ms). null = picker hidden. */
+let pendingAdjustDeltaMs = null;
 
 const DEFAULT_DOCUMENT_TITLE = document.title || "Daily Log";
 
@@ -2062,6 +2068,7 @@ function setActiveSideTab(tabId) {
   if (tabId !== "timers") {
     closeTransferMenus();
     hideStopwatchReadingFields();
+    hideStopwatchAdjustPicker();
   }
 }
 
@@ -2148,6 +2155,279 @@ async function pasteNextBookUrl() {
 
 function pad2(n) {
   return String(n).padStart(2, "0");
+}
+
+function createStopwatchElement(id) {
+  const root = document.createElement("div");
+  root.className = "stopwatch";
+  root.dataset.stopwatch = String(id);
+  root.innerHTML = `
+    <div class="stopwatch-display" aria-live="polite">
+      <span class="stopwatch-hours">00</span>
+      <span class="stopwatch-sep" aria-hidden="true">:</span>
+      <span class="stopwatch-minutes">00</span>
+      <span class="stopwatch-sep" aria-hidden="true">:</span>
+      <span class="stopwatch-seconds">00</span>
+    </div>
+    <div class="stopwatch-actions">
+      <button type="button" class="stopwatch-btn" data-action="toggle">Start</button>
+      <button type="button" class="stopwatch-btn" data-action="reset">Reset</button>
+    </div>
+    <div class="stopwatch-transfer">
+      <button
+        type="button"
+        class="stopwatch-btn stopwatch-transfer-btn"
+        data-action="transfer"
+        aria-haspopup="menu"
+        aria-expanded="false"
+      >
+        Transfer
+      </button>
+      <div class="stopwatch-transfer-menu" role="menu" hidden></div>
+      <div class="stopwatch-reading-fields" hidden>
+        <label class="sr-only" for="sw-${id}-page-from">Page from</label>
+        <input
+          id="sw-${id}-page-from"
+          class="composer-input page-input stopwatch-page-input"
+          type="text"
+          inputmode="numeric"
+          placeholder="from"
+          autocomplete="off"
+          data-page-from
+        />
+        <span class="page-range-sep" aria-hidden="true">–</span>
+        <label class="sr-only" for="sw-${id}-page-to">Page to</label>
+        <input
+          id="sw-${id}-page-to"
+          class="composer-input page-input stopwatch-page-input"
+          type="text"
+          inputmode="numeric"
+          placeholder="to"
+          autocomplete="off"
+          data-page-to
+        />
+      </div>
+    </div>
+  `;
+  return root;
+}
+
+function syncStopwatchManageButtons() {
+  if (stopwatchAddBtn) {
+    stopwatchAddBtn.disabled = stopwatches.length >= MAX_STOPWATCHES;
+  }
+  if (stopwatchRemoveBtn) {
+    stopwatchRemoveBtn.disabled = stopwatches.length <= MIN_STOPWATCHES;
+  }
+}
+
+function reindexStopwatches() {
+  stopwatches.forEach((sw, index) => {
+    sw.id = index;
+    if (!sw.root) return;
+    sw.root.dataset.stopwatch = String(index);
+    const from = sw.root.querySelector("[data-page-from]");
+    const to = sw.root.querySelector("[data-page-to]");
+    const fromLabel = sw.root.querySelector(`label[for^="sw-"][for$="-page-from"]`);
+    const toLabel = sw.root.querySelector(`label[for^="sw-"][for$="-page-to"]`);
+    if (from) from.id = `sw-${index}-page-from`;
+    if (to) to.id = `sw-${index}-page-to`;
+    if (fromLabel) fromLabel.setAttribute("for", `sw-${index}-page-from`);
+    if (toLabel) toLabel.setAttribute("for", `sw-${index}-page-to`);
+  });
+}
+
+function bindOneStopwatchReadingFields(sw) {
+  const inputs = getStopwatchPageInputs(sw);
+  if (!inputs) return;
+
+  inputs.pageFrom.addEventListener("input", onStopwatchPageFromInput);
+  inputs.pageTo.addEventListener("input", onStopwatchPageToInput);
+
+  inputs.pageFrom.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== "-" && event.key !== " ") return;
+    event.preventDefault();
+    inputs.pageFrom.value = digitsOnly(inputs.pageFrom.value);
+    inputs.pageTo.focus();
+  });
+
+  inputs.pageTo.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    completeReadingTransfer(sw);
+  });
+}
+
+function buildOneTransferMenu(sw) {
+  const menu = sw.root?.querySelector(".stopwatch-transfer-menu");
+  if (!menu) return;
+  menu.replaceChildren();
+  for (const category of CATEGORIES) {
+    const option = document.createElement("button");
+    option.type = "button";
+    option.className = "stopwatch-transfer-option";
+    option.setAttribute("role", "menuitem");
+    option.dataset.category = category;
+    option.textContent = category;
+    menu.append(option);
+  }
+}
+
+function createStopwatch(initial = {}) {
+  const id = stopwatches.length;
+  const root = createStopwatchElement(id);
+  if (stopwatchListEl) stopwatchListEl.append(root);
+
+  const sw = {
+    id,
+    elapsedMs: Number(initial.elapsedMs) > 0 ? Number(initial.elapsedMs) : 0,
+    running: false,
+    startedAt: null,
+    intervalId: null,
+    root,
+  };
+  stopwatches.push(sw);
+  buildOneTransferMenu(sw);
+  bindOneStopwatchReadingFields(sw);
+
+  const startedAt = Number(initial.startedAt);
+  if (initial.running && Number.isFinite(startedAt) && startedAt > 0) {
+    sw.running = true;
+    sw.startedAt = startedAt;
+    tickStopwatch(sw);
+  }
+
+  renderStopwatch(sw);
+  syncStopwatchManageButtons();
+  return sw;
+}
+
+function addStopwatch() {
+  if (stopwatches.length >= MAX_STOPWATCHES) return;
+  createStopwatch();
+  hideStopwatchAdjustPicker();
+  saveStopwatches();
+}
+
+function removeLastStopwatch() {
+  if (stopwatches.length <= MIN_STOPWATCHES) return;
+  const sw = stopwatches[stopwatches.length - 1];
+  if (sw.running) {
+    sw.elapsedMs = getStopwatchElapsed(sw);
+    sw.running = false;
+    sw.startedAt = null;
+  }
+  if (sw.intervalId != null) {
+    clearInterval(sw.intervalId);
+    sw.intervalId = null;
+  }
+  if (pendingReadingTransferId === sw.id) pendingReadingTransferId = null;
+  sw.root?.remove();
+  stopwatches.pop();
+  reindexStopwatches();
+  hideStopwatchAdjustPicker();
+  updateDocumentTitleFromStopwatches();
+  syncStopwatchManageButtons();
+  saveStopwatches();
+}
+
+function clearAllStopwatches() {
+  for (const sw of stopwatches) {
+    if (sw.intervalId != null) clearInterval(sw.intervalId);
+    sw.root?.remove();
+  }
+  stopwatches = [];
+  pendingReadingTransferId = null;
+  if (stopwatchListEl) stopwatchListEl.replaceChildren();
+  syncStopwatchManageButtons();
+}
+
+function ensureStopwatchCount(count, savedEntries = []) {
+  const target = Math.min(
+    MAX_STOPWATCHES,
+    Math.max(MIN_STOPWATCHES, Number(count) || MIN_STOPWATCHES),
+  );
+  clearAllStopwatches();
+  for (let i = 0; i < target; i++) {
+    createStopwatch(savedEntries[i] || {});
+  }
+}
+
+function parseAdjustDurationMs() {
+  const minutesRaw = digitsOnly(stopwatchAdjustMinutes?.value || "");
+  const secondsRaw = digitsOnly(stopwatchAdjustSeconds?.value || "");
+  if (stopwatchAdjustMinutes) stopwatchAdjustMinutes.value = minutesRaw;
+  if (stopwatchAdjustSeconds) stopwatchAdjustSeconds.value = secondsRaw;
+
+  const minutes = minutesRaw === "" ? 0 : Number(minutesRaw);
+  const seconds = secondsRaw === "" ? 0 : Number(secondsRaw);
+
+  if (!Number.isInteger(minutes) || minutes < 0) {
+    stopwatchAdjustMinutes?.setCustomValidity("Enter whole minutes (0+)");
+    stopwatchAdjustMinutes?.reportValidity();
+    return null;
+  }
+  if (!Number.isInteger(seconds) || seconds < 0 || seconds > 59) {
+    stopwatchAdjustSeconds?.setCustomValidity("Enter seconds 0–59");
+    stopwatchAdjustSeconds?.reportValidity();
+    return null;
+  }
+  stopwatchAdjustMinutes?.setCustomValidity("");
+  stopwatchAdjustSeconds?.setCustomValidity("");
+
+  const totalMs = (minutes * 60 + seconds) * 1000;
+  if (totalMs <= 0) {
+    stopwatchAdjustMinutes?.setCustomValidity("Enter some time to adjust");
+    stopwatchAdjustMinutes?.reportValidity();
+    return null;
+  }
+  return totalMs;
+}
+
+function hideStopwatchAdjustPicker() {
+  pendingAdjustDeltaMs = null;
+  if (!stopwatchAdjustPicker) return;
+  stopwatchAdjustPicker.hidden = true;
+  stopwatchAdjustPicker.replaceChildren();
+}
+
+function showStopwatchAdjustPicker(deltaMs) {
+  pendingAdjustDeltaMs = deltaMs;
+  if (!stopwatchAdjustPicker) return;
+  stopwatchAdjustPicker.replaceChildren();
+  stopwatches.forEach((sw, index) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "stopwatch-btn";
+    btn.dataset.action = "adjust-target";
+    btn.dataset.stopwatchIndex = String(index);
+    btn.textContent = `#${index + 1}`;
+    stopwatchAdjustPicker.append(btn);
+  });
+  stopwatchAdjustPicker.hidden = false;
+}
+
+function beginStopwatchAdjust(sign) {
+  const ms = parseAdjustDurationMs();
+  if (ms == null) return;
+  showStopwatchAdjustPicker(sign * ms);
+}
+
+function applyStopwatchAdjust(index) {
+  if (pendingAdjustDeltaMs == null) return;
+  const sw = stopwatches[index];
+  if (!sw) return;
+
+  // Fold running time into elapsedMs first so the delta sticks cleanly.
+  if (sw.running && sw.startedAt != null) {
+    sw.elapsedMs = getStopwatchElapsed(sw);
+    sw.startedAt = Date.now();
+  }
+
+  sw.elapsedMs = Math.max(0, sw.elapsedMs + pendingAdjustDeltaMs);
+  renderStopwatch(sw);
+  saveStopwatches();
+  hideStopwatchAdjustPicker();
 }
 
 function getStopwatchElapsed(sw) {
@@ -2261,29 +2541,22 @@ async function persistStopwatchesToSupabase(payload) {
   }));
   const { error } = await supabase.from("stopwatches").upsert(rows);
   if (error) throw error;
+
+  // Drop orphaned rows when the user removed a stopwatch.
+  const { error: deleteError } = await supabase
+    .from("stopwatches")
+    .delete()
+    .gte("id", payload.length);
+  if (deleteError) throw deleteError;
 }
 
 async function restoreStopwatches() {
   const saved = await loadStopwatches();
-  if (!saved) return;
-
-  for (const sw of stopwatches) {
-    const entry = saved[sw.id];
-    if (!entry || typeof entry !== "object") continue;
-
-    const elapsedMs = Number(entry.elapsedMs);
-    sw.elapsedMs = Number.isFinite(elapsedMs) && elapsedMs > 0 ? elapsedMs : 0;
-
-    const startedAt = Number(entry.startedAt);
-    if (entry.running && Number.isFinite(startedAt) && startedAt > 0) {
-      sw.running = true;
-      sw.startedAt = startedAt;
-      tickStopwatch(sw);
-    } else {
-      sw.running = false;
-      sw.startedAt = null;
-    }
+  if (!saved || !Array.isArray(saved) || saved.length === 0) {
+    ensureStopwatchCount(MIN_STOPWATCHES);
+    return;
   }
+  ensureStopwatchCount(saved.length, saved);
 }
 
 function tickStopwatch(sw) {
@@ -2310,17 +2583,20 @@ function updateDocumentTitleFromStopwatches() {
 }
 
 function renderStopwatch(sw) {
+  if (!sw?.root) return;
   const time = formatStopwatchTime(sw);
   const [hours, minutes, seconds] = time.split(":");
   const hoursEl = sw.root.querySelector(".stopwatch-hours");
   const minutesEl = sw.root.querySelector(".stopwatch-minutes");
   const secondsEl = sw.root.querySelector(".stopwatch-seconds");
   const toggleBtn = sw.root.querySelector('[data-action="toggle"]');
-  hoursEl.textContent = hours;
-  minutesEl.textContent = minutes;
-  secondsEl.textContent = seconds;
-  toggleBtn.textContent = sw.running ? "Stop" : "Start";
-  toggleBtn.classList.toggle("is-running", sw.running);
+  if (hoursEl) hoursEl.textContent = hours;
+  if (minutesEl) minutesEl.textContent = minutes;
+  if (secondsEl) secondsEl.textContent = seconds;
+  if (toggleBtn) {
+    toggleBtn.textContent = sw.running ? "Stop" : "Start";
+    toggleBtn.classList.toggle("is-running", sw.running);
+  }
   updateDocumentTitleFromStopwatches();
 }
 
@@ -2499,20 +2775,15 @@ function toggleTransferMenu(sw) {
   btn.setAttribute("aria-expanded", nextOpen ? "true" : "false");
 }
 
+function bindStopwatchReadingFields() {
+  for (const sw of stopwatches) {
+    bindOneStopwatchReadingFields(sw);
+  }
+}
+
 function buildTransferMenus() {
   for (const sw of stopwatches) {
-    const menu = sw.root.querySelector(".stopwatch-transfer-menu");
-    if (!menu) continue;
-    menu.replaceChildren();
-    for (const category of CATEGORIES) {
-      const option = document.createElement("button");
-      option.type = "button";
-      option.className = "stopwatch-transfer-option";
-      option.setAttribute("role", "menuitem");
-      option.dataset.category = category;
-      option.textContent = category;
-      menu.append(option);
-    }
+    buildOneTransferMenu(sw);
   }
 }
 
@@ -2579,29 +2850,6 @@ function onStopwatchPageToInput(event) {
   input.value = digitsOnly(input.value);
 }
 
-function bindStopwatchReadingFields() {
-  for (const sw of stopwatches) {
-    const inputs = getStopwatchPageInputs(sw);
-    if (!inputs) continue;
-
-    inputs.pageFrom.addEventListener("input", onStopwatchPageFromInput);
-    inputs.pageTo.addEventListener("input", onStopwatchPageToInput);
-
-    inputs.pageFrom.addEventListener("keydown", (event) => {
-      if (event.key !== "Enter" && event.key !== "-" && event.key !== " ") return;
-      event.preventDefault();
-      inputs.pageFrom.value = digitsOnly(inputs.pageFrom.value);
-      inputs.pageTo.focus();
-    });
-
-    inputs.pageTo.addEventListener("keydown", (event) => {
-      if (event.key !== "Enter") return;
-      event.preventDefault();
-      completeReadingTransfer(sw);
-    });
-  }
-}
-
 for (const tab of sideTabs) {
   tab.addEventListener("click", () => {
     setActiveSideTab(tab.dataset.tab);
@@ -2653,16 +2901,39 @@ if (timersPanel) {
 
     const btn = event.target.closest("[data-action]");
     if (!btn) return;
+
+    const action = btn.dataset.action;
+    if (action === "add-stopwatch") {
+      addStopwatch();
+      return;
+    }
+    if (action === "remove-stopwatch") {
+      removeLastStopwatch();
+      return;
+    }
+    if (action === "adjust-add") {
+      beginStopwatchAdjust(1);
+      return;
+    }
+    if (action === "adjust-subtract") {
+      beginStopwatchAdjust(-1);
+      return;
+    }
+    if (action === "adjust-target") {
+      applyStopwatchAdjust(Number(btn.dataset.stopwatchIndex));
+      return;
+    }
+
     const root = btn.closest("[data-stopwatch]");
     if (!root) return;
     const sw = stopwatches[Number(root.dataset.stopwatch)];
     if (!sw) return;
-    if (btn.dataset.action === "toggle") {
+    if (action === "toggle") {
       if (sw.running) stopStopwatch(sw);
       else startStopwatch(sw);
-    } else if (btn.dataset.action === "reset") {
+    } else if (action === "reset") {
       resetStopwatch(sw);
-    } else if (btn.dataset.action === "transfer") {
+    } else if (action === "transfer") {
       event.stopPropagation();
       toggleTransferMenu(sw);
     }
@@ -2677,11 +2948,15 @@ document.addEventListener("click", (event) => {
 
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
+  if (pendingAdjustDeltaMs != null) {
+    hideStopwatchAdjustPicker();
+    return;
+  }
   const anyMenuOpen = stopwatches.some(
-    (sw) => !sw.root.querySelector(".stopwatch-transfer-menu")?.hidden
+    (sw) => !sw.root?.querySelector(".stopwatch-transfer-menu")?.hidden
   );
   const anyReadingFields = stopwatches.some(
-    (sw) => !sw.root.querySelector(".stopwatch-reading-fields")?.hidden
+    (sw) => !sw.root?.querySelector(".stopwatch-reading-fields")?.hidden
   );
   if (anyMenuOpen) {
     closeTransferMenus();
@@ -2692,12 +2967,24 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
-buildTransferMenus();
-bindStopwatchReadingFields();
+if (stopwatchAdjustMinutes) {
+  stopwatchAdjustMinutes.addEventListener("input", () => {
+    stopwatchAdjustMinutes.setCustomValidity("");
+    stopwatchAdjustMinutes.value = digitsOnly(stopwatchAdjustMinutes.value);
+  });
+}
+if (stopwatchAdjustSeconds) {
+  stopwatchAdjustSeconds.addEventListener("input", () => {
+    stopwatchAdjustSeconds.setCustomValidity("");
+    stopwatchAdjustSeconds.value = digitsOnly(stopwatchAdjustSeconds.value);
+  });
+}
+
+// Fresh paint before async restore — one empty stopwatch.
+ensureStopwatchCount(MIN_STOPWATCHES);
 syncNextBookUrlInput();
 syncOpenThresholdInput();
 renderThresholdHistory();
-stopwatches.forEach(renderStopwatch);
 
 async function flushAllPendingPersists() {
   if (daysPersistTimer) {

@@ -632,9 +632,69 @@ body {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 1.75rem;
+  gap: 1.25rem;
   padding: 1.25rem 0.85rem;
   overflow-y: auto;
+}
+
+#panel-timers {
+  justify-content: flex-start;
+}
+
+.stopwatch-list {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1.75rem;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+
+.stopwatch-manage {
+  display: flex;
+  flex-direction: row;
+  gap: 0.35rem;
+  width: 100%;
+  flex: none;
+}
+
+.stopwatch-adjust {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  width: 100%;
+  flex: none;
+  margin-top: 0.15rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--composer-border);
+}
+
+.stopwatch-adjust-inputs,
+.stopwatch-adjust-actions,
+.stopwatch-adjust-picker {
+  display: flex;
+  flex-direction: row;
+  gap: 0.35rem;
+  width: 100%;
+}
+
+.stopwatch-adjust-input {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  padding: 0.35rem 0.4rem;
+  font-size: 0.72rem;
+  text-align: center;
+}
+
+.stopwatch-adjust-picker[hidden] {
+  display: none;
+}
+
+.stopwatch-adjust-picker:not([hidden]) {
+  display: flex;
+  flex-wrap: wrap;
 }
 
 .side-panel-next-book {
@@ -811,6 +871,15 @@ body {
 
 .stopwatch-btn:hover {
   background: var(--composer-hover);
+}
+
+.stopwatch-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.stopwatch-btn:disabled:hover {
+  background: transparent;
 }
 
 .stopwatch-btn:focus-visible {

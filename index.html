@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Daily Log</title>
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles.css?v=stopwatch-manage" />
   </head>
   <body>
     <main class="app">
@@ -121,102 +121,49 @@
           aria-labelledby="tab-timers"
           data-panel="timers"
         >
-          <div class="stopwatch" data-stopwatch="0">
-            <div class="stopwatch-display" aria-live="polite">
-              <span class="stopwatch-hours">00</span>
-              <span class="stopwatch-sep" aria-hidden="true">:</span>
-              <span class="stopwatch-minutes">00</span>
-              <span class="stopwatch-sep" aria-hidden="true">:</span>
-              <span class="stopwatch-seconds">00</span>
-            </div>
-            <div class="stopwatch-actions">
-              <button type="button" class="stopwatch-btn" data-action="toggle">Start</button>
-              <button type="button" class="stopwatch-btn" data-action="reset">Reset</button>
-            </div>
-            <div class="stopwatch-transfer">
-              <button
-                type="button"
-                class="stopwatch-btn stopwatch-transfer-btn"
-                data-action="transfer"
-                aria-haspopup="menu"
-                aria-expanded="false"
-              >
-                Transfer
-              </button>
-              <div class="stopwatch-transfer-menu" role="menu" hidden></div>
-              <div class="stopwatch-reading-fields" hidden>
-                <label class="sr-only" for="sw-0-page-from">Page from</label>
-                <input
-                  id="sw-0-page-from"
-                  class="composer-input page-input stopwatch-page-input"
-                  type="text"
-                  inputmode="numeric"
-                  placeholder="from"
-                  autocomplete="off"
-                  data-page-from
-                />
-                <span class="page-range-sep" aria-hidden="true">–</span>
-                <label class="sr-only" for="sw-0-page-to">Page to</label>
-                <input
-                  id="sw-0-page-to"
-                  class="composer-input page-input stopwatch-page-input"
-                  type="text"
-                  inputmode="numeric"
-                  placeholder="to"
-                  autocomplete="off"
-                  data-page-to
-                />
-              </div>
-            </div>
+          <div id="stopwatch-list" class="stopwatch-list"></div>
+
+          <div class="stopwatch-manage">
+            <button type="button" class="stopwatch-btn" id="stopwatch-add" data-action="add-stopwatch">
+              Add
+            </button>
+            <button type="button" class="stopwatch-btn" id="stopwatch-remove" data-action="remove-stopwatch">
+              Remove
+            </button>
           </div>
 
-          <div class="stopwatch" data-stopwatch="1">
-            <div class="stopwatch-display" aria-live="polite">
-              <span class="stopwatch-hours">00</span>
-              <span class="stopwatch-sep" aria-hidden="true">:</span>
-              <span class="stopwatch-minutes">00</span>
-              <span class="stopwatch-sep" aria-hidden="true">:</span>
-              <span class="stopwatch-seconds">00</span>
+          <div class="stopwatch-adjust" aria-label="Adjust stopwatch time">
+            <div class="stopwatch-adjust-inputs">
+              <label class="sr-only" for="stopwatch-adjust-minutes">Minutes</label>
+              <input
+                id="stopwatch-adjust-minutes"
+                class="composer-input stopwatch-adjust-input"
+                type="text"
+                inputmode="numeric"
+                placeholder="min"
+                autocomplete="off"
+              />
+              <label class="sr-only" for="stopwatch-adjust-seconds">Seconds</label>
+              <input
+                id="stopwatch-adjust-seconds"
+                class="composer-input stopwatch-adjust-input"
+                type="text"
+                inputmode="numeric"
+                placeholder="sec"
+                autocomplete="off"
+              />
             </div>
-            <div class="stopwatch-actions">
-              <button type="button" class="stopwatch-btn" data-action="toggle">Start</button>
-              <button type="button" class="stopwatch-btn" data-action="reset">Reset</button>
+            <div class="stopwatch-adjust-actions">
+              <button type="button" class="stopwatch-btn" data-action="adjust-add">Add</button>
+              <button type="button" class="stopwatch-btn" data-action="adjust-subtract">Subtract</button>
             </div>
-            <div class="stopwatch-transfer">
-              <button
-                type="button"
-                class="stopwatch-btn stopwatch-transfer-btn"
-                data-action="transfer"
-                aria-haspopup="menu"
-                aria-expanded="false"
-              >
-                Transfer
-              </button>
-              <div class="stopwatch-transfer-menu" role="menu" hidden></div>
-              <div class="stopwatch-reading-fields" hidden>
-                <label class="sr-only" for="sw-1-page-from">Page from</label>
-                <input
-                  id="sw-1-page-from"
-                  class="composer-input page-input stopwatch-page-input"
-                  type="text"
-                  inputmode="numeric"
-                  placeholder="from"
-                  autocomplete="off"
-                  data-page-from
-                />
-                <span class="page-range-sep" aria-hidden="true">–</span>
-                <label class="sr-only" for="sw-1-page-to">Page to</label>
-                <input
-                  id="sw-1-page-to"
-                  class="composer-input page-input stopwatch-page-input"
-                  type="text"
-                  inputmode="numeric"
-                  placeholder="to"
-                  autocomplete="off"
-                  data-page-to
-                />
-              </div>
-            </div>
+            <div
+              id="stopwatch-adjust-picker"
+              class="stopwatch-adjust-picker"
+              role="group"
+              aria-label="Choose stopwatch"
+              hidden
+            ></div>
           </div>
         </div>
 
@@ -290,6 +237,6 @@
 
     <script src="vendor/supabase.js"></script>
     <script src="supabase-config.js"></script>
-    <script src="script.js"></script>
+    <script src="script.js?v=stopwatch-manage"></script>
   </body>
 </html>
