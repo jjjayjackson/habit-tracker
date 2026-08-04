@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Daily Log</title>
-    <link rel="stylesheet" href="styles.css?v=stopwatch-manage" />
+    <link rel="stylesheet" href="styles.css?v=bridge-stopwatch" />
   </head>
   <body>
     <main class="app">
@@ -132,6 +132,45 @@
             </button>
           </div>
 
+          <div
+            id="bridge-stopwatch"
+            class="stopwatch stopwatch-bridge"
+            data-bridge-stopwatch
+            aria-label="Adjustment stopwatch"
+          >
+            <p class="stopwatch-bridge-label">Adjust</p>
+            <div class="stopwatch-display" aria-live="polite">
+              <span class="stopwatch-hours">00</span>
+              <span class="stopwatch-sep" aria-hidden="true">:</span>
+              <span class="stopwatch-minutes">00</span>
+              <span class="stopwatch-sep" aria-hidden="true">:</span>
+              <span class="stopwatch-seconds">00</span>
+            </div>
+            <div class="stopwatch-actions">
+              <button type="button" class="stopwatch-btn" data-action="bridge-toggle">
+                Start
+              </button>
+              <button type="button" class="stopwatch-btn" data-action="bridge-reset">
+                Reset
+              </button>
+            </div>
+            <div class="stopwatch-actions">
+              <button type="button" class="stopwatch-btn" data-action="bridge-add">
+                Add to…
+              </button>
+              <button type="button" class="stopwatch-btn" data-action="bridge-subtract">
+                Subtract from…
+              </button>
+            </div>
+            <div
+              id="bridge-stopwatch-picker"
+              class="stopwatch-adjust-picker"
+              role="group"
+              aria-label="Choose stopwatch to adjust"
+              hidden
+            ></div>
+          </div>
+
           <div class="stopwatch-adjust" aria-label="Adjust stopwatch time">
             <div class="stopwatch-adjust-inputs">
               <label class="sr-only" for="stopwatch-adjust-minutes">Minutes</label>
@@ -237,6 +276,6 @@
 
     <script src="vendor/supabase.js"></script>
     <script src="supabase-config.js"></script>
-    <script src="script.js?v=stopwatch-manage"></script>
+    <script src="script.js?v=bridge-stopwatch"></script>
   </body>
 </html>
