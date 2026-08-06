@@ -1,16 +1,25 @@
-const CATEGORIES = [
-  "Drafts to Drive",
-  "Programming • Figma • CAD",
-  "School",
-  "Reading",
-  "TDs",
+/**
+ * Categories are renameable, so every lookup goes through a fixed `id` while the
+ * `name` is only ever a label. Ids must never change — the Reading page-tracking
+ * flow and the saved dropdown selection both key off them.
+ */
+const DEFAULT_CATEGORIES = [
+  { id: "drafts-to-drive", name: "Drafts to Drive" },
+  { id: "programming-figma-cad", name: "Programming • Figma • CAD" },
+  { id: "reading", name: "Reading" },
+  { id: "school", name: "School" },
+  { id: "tds", name: "TDs" },
 ];
+const READING_CATEGORY_ID = "reading";
+const MAX_CATEGORY_NAME_LENGTH = 40;
 
 const SOL_EPOCH = { month: 4, day: 22 }; // May 22 (0-indexed month)
 const STORAGE_KEY = "habit-tracker-mvp:rows";
 const BOOKS_STORAGE_KEY = "habit-tracker-mvp:reading-books";
 const STOPWATCHES_STORAGE_KEY = "habit-tracker-mvp:stopwatches";
 const BRIDGE_STOPWATCH_STORAGE_KEY = "habit-tracker-mvp:bridge-stopwatch";
+const COLLAPSED_DAYS_STORAGE_KEY = "habit-tracker-mvp:collapsed-days";
+const CATEGORIES_STORAGE_KEY = "habit-tracker-mvp:categories";
 const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 /** Open next-book URL once when finished pages ÷ total ≥ this (0.8 = 80%). */
 const NEXT_BOOK_OPEN_THRESHOLD = 0.8;
@@ -38,14 +47,18 @@ const supabase = window.supabase.createClient(
 let daysPersistTimer = null;
 let booksPersistTimer = null;
 let stopwatchesPersistTimer = null;
+let categoriesPersistTimer = null;
+let collapsedDaysPersistTimer = null;
 let daysPersistChain = Promise.resolve();
 let booksPersistChain = Promise.resolve();
 let stopwatchesPersistChain = Promise.resolve();
+let categoriesPersistChain = Promise.resolve();
+let collapsedDaysPersistChain = Promise.resolve();
 
 const state = {
   days: {},
-  dragDayKey: null,
-  dragIndex: null,
+  collapsedDays: new Set(),
+  categories: defaultCategories(),
   books: {
     activeBookId: null,
     books: [],
@@ -669,7 +682,7 @@ function maxFinishedPageForBook(bookId) {
   for (const rows of Object.values(state.days)) {
     if (!Array.isArray(rows)) continue;
     for (const row of rows) {
-      if (row.category !== "Reading" || !Array.isArray(row.durations)) continue;
+      if (!Array.isArray(row.durations)) continue;
       for (const entry of row.durations) {
         if (entry.bookId !== bookId) continue;
         if (Number.isInteger(entry.pageTo)) {
@@ -703,13 +716,180 @@ function prefillPageFrom() {
   pageFromInput.value = suggested != null ? String(suggested) : "";
 }
 
+// --- Categories ---
+
+function defaultCategories() {
+  return DEFAULT_CATEGORIES.map((category) => ({ ...category }));
+}
+
+function normalizeCategoryName(raw) {
+  return typeof raw === "string" ? raw.trim().replace(/\s+/g, " ") : "";
+}
+
+/** Saved names are merged onto the defaults by id, so the set of categories is fixed. */
+function mergeCategoryEntries(entries) {
+  const savedNames = new Map();
+  for (const entry of entries || []) {
+    if (!entry || typeof entry.id !== "string") continue;
+    const name = normalizeCategoryName(entry.name);
+    if (name) savedNames.set(entry.id, name);
+  }
+
+  const loaded = defaultCategories().map((category) => ({
+    ...category,
+    name: savedNames.get(category.id) || category.name,
+  }));
+
+  // A duplicate name would make two categories share one logged row.
+  const seen = new Set();
+  for (const category of loaded) {
+    if (seen.has(category.name)) {
+      category.name = DEFAULT_CATEGORIES.find((d) => d.id === category.id).name;
+    }
+    seen.add(category.name);
+  }
+  return loaded;
+}
+
+function categoriesAreCustomized(categories) {
+  const defaults = new Map(DEFAULT_CATEGORIES.map((c) => [c.id, c.name]));
+  return (categories || []).some((c) => defaults.get(c.id) !== c.name);
+}
+
+function writeCategoriesLocal(categories = state.categories) {
+  try {
+    localStorage.setItem(CATEGORIES_STORAGE_KEY, JSON.stringify(categories));
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+function loadCategoriesFromLocal() {
+  try {
+    const raw = localStorage.getItem(CATEGORIES_STORAGE_KEY);
+    if (!raw) return defaultCategories();
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return defaultCategories();
+    return mergeCategoryEntries(parsed);
+  } catch {
+    return defaultCategories();
+  }
+}
+
+async function loadCategoriesFromSupabase() {
+  const { data, error } = await supabase
+    .from("categories")
+    .select("id, name")
+    .order("id", { ascending: true });
+  if (error) throw error;
+  if (!data || data.length === 0) return null;
+  return mergeCategoryEntries(data);
+}
+
+async function persistCategoriesToSupabase(categories = state.categories) {
+  const now = new Date().toISOString();
+  const rows = categories.map((category) => ({
+    id: category.id,
+    name: category.name,
+    updated_at: now,
+  }));
+  const { error } = await supabase.from("categories").upsert(rows);
+  if (error) throw error;
+}
+
+async function loadCategories() {
+  const local = loadCategoriesFromLocal();
+  try {
+    const remote = await loadCategoriesFromSupabase();
+    if (remote) {
+      // Local renames beat a still-default remote seed (first sync after this feature).
+      if (categoriesAreCustomized(local) && !categoriesAreCustomized(remote)) {
+        await persistCategoriesToSupabase(local);
+        writeCategoriesLocal(local);
+        return local;
+      }
+      writeCategoriesLocal(remote);
+      return remote;
+    }
+  } catch (err) {
+    console.error("Failed to load categories from Supabase:", err);
+  }
+  return local;
+}
+
+function saveCategories() {
+  writeCategoriesLocal();
+  if (categoriesPersistTimer) clearTimeout(categoriesPersistTimer);
+  categoriesPersistTimer = setTimeout(() => {
+    categoriesPersistTimer = null;
+    const snapshot = structuredClone(state.categories);
+    categoriesPersistChain = categoriesPersistChain
+      .then(() => persistCategoriesToSupabase(snapshot))
+      .catch((err) =>
+        console.error("Failed to save categories to Supabase:", err),
+      );
+  }, PERSIST_DEBOUNCE_MS);
+}
+
+function sortedCategories() {
+  return [...state.categories].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function categoryById(id) {
+  return state.categories.find((category) => category.id === id) || null;
+}
+
+function categoryNameError(id, rawName) {
+  const name = normalizeCategoryName(rawName);
+  if (!name) return "Name can’t be empty";
+  if (name.length > MAX_CATEGORY_NAME_LENGTH) {
+    return `Keep it under ${MAX_CATEGORY_NAME_LENGTH} characters`;
+  }
+  if (state.categories.some((other) => other.id !== id && other.name === name)) {
+    return "Another category already has that name";
+  }
+  return null;
+}
+
+/** Logged rows store the display name, so renaming has to rewrite past entries. */
+function relabelLoggedCategory(fromName, toName) {
+  for (const rows of Object.values(state.days)) {
+    if (!Array.isArray(rows)) continue;
+    for (let i = rows.length - 1; i >= 0; i -= 1) {
+      const row = rows[i];
+      if (row.category !== fromName) continue;
+      const existing = rows.find((other) => other !== row && other.category === toName);
+      if (existing) {
+        existing.durations.push(...row.durations);
+        rows.splice(i, 1);
+      } else {
+        row.category = toName;
+      }
+    }
+  }
+}
+
+function renameCategory(id, rawName) {
+  const category = categoryById(id);
+  if (!category) return false;
+  const name = normalizeCategoryName(rawName);
+  if (name === category.name) return false;
+  if (categoryNameError(id, name)) return false;
+
+  const previousName = category.name;
+  category.name = name;
+  saveCategories();
+  relabelLoggedCategory(previousName, name);
+  return true;
+}
+
 // --- Rows / durations ---
 
 function findRowIndex(dayKey, category) {
   return rowsFor(dayKey).findIndex((row) => row.category === category);
 }
 
-function normalizeDuration(entry, category) {
+function normalizeDuration(entry) {
   if (!entry || typeof entry !== "object") return null;
 
   let seconds;
@@ -733,17 +913,16 @@ function normalizeDuration(entry, category) {
     loggedAt,
   };
 
-  if (category === "Reading") {
-    const pageFrom = Number(entry.pageFrom);
-    const pageTo = Number(entry.pageTo);
-    if (
-      !Number.isInteger(pageFrom) ||
-      !Number.isInteger(pageTo) ||
-      pageFrom < 1 ||
-      pageTo < pageFrom
-    ) {
-      return null;
-    }
+  // Page data is kept whenever it's valid rather than when the category is named
+  // "Reading", so renaming that category can't strip reading history on reload.
+  const pageFrom = Number(entry.pageFrom);
+  const pageTo = Number(entry.pageTo);
+  if (
+    Number.isInteger(pageFrom) &&
+    Number.isInteger(pageTo) &&
+    pageFrom >= 1 &&
+    pageTo >= pageFrom
+  ) {
     normalized.pageFrom = pageFrom;
     normalized.pageTo = pageTo;
     if (typeof entry.bookId === "string" && entry.bookId) {
@@ -765,9 +944,7 @@ function normalizeRow(row) {
   if (!Array.isArray(row.durations)) return null;
 
   const category = row.category.trim();
-  const durations = row.durations
-    .map((entry) => normalizeDuration(entry, category))
-    .filter(Boolean);
+  const durations = row.durations.map(normalizeDuration).filter(Boolean);
   if (durations.length === 0) return null;
 
   return {
@@ -791,7 +968,7 @@ function migrateFlatRows(rows) {
     if (!category || !Array.isArray(row.durations)) continue;
 
     for (const entry of row.durations) {
-      const normalized = normalizeDuration(entry, category);
+      const normalized = normalizeDuration(entry);
       if (!normalized) continue;
       const dayKey = localDayKey(new Date(normalized.loggedAt));
       if (!days[dayKey]) days[dayKey] = [];
@@ -837,6 +1014,11 @@ function renameDay(fromKey, toKey) {
 
   if (noteEditingKey?.startsWith(`${fromKey}:`)) {
     noteEditingKey = `${toKey}:${noteEditingKey.slice(fromKey.length + 1)}`;
+  }
+
+  if (state.collapsedDays.delete(fromKey)) {
+    state.collapsedDays.add(toKey);
+    saveCollapsedDays();
   }
   return true;
 }
@@ -988,12 +1170,24 @@ function runningTotals(durations) {
   });
 }
 
+/** Sum of every logged entry across all categories for one day. */
+function dayTotalSeconds(rows) {
+  let sum = 0;
+  for (const row of rows || []) {
+    if (!Array.isArray(row.durations)) continue;
+    for (const entry of row.durations) {
+      sum += entrySeconds(entry);
+    }
+  }
+  return sum;
+}
+
 function formatReadingEntry(entry) {
   return `${formatLoggedDuration(entrySeconds(entry))} ${entry.pageFrom}-${entry.pageTo}`;
 }
 
-function formatEntryLabel(row, entry) {
-  if (row.category === "Reading" && entry.pageFrom != null && entry.pageTo != null) {
+function formatEntryLabel(entry) {
+  if (entry.pageFrom != null && entry.pageTo != null) {
     return formatReadingEntry(entry);
   }
   return formatLoggedDuration(entrySeconds(entry));
@@ -1004,6 +1198,103 @@ function syncActiveDay() {
   if (activeDayKey === today) return false;
   activeDayKey = today;
   return true;
+}
+
+// --- Collapsed days (synced UI preference) ---
+
+function normalizeCollapsedDayKeys(keys) {
+  if (!Array.isArray(keys)) return [];
+  return [...new Set(keys.filter((key) => typeof key === "string" && DAY_KEY_RE.test(key)))].sort();
+}
+
+function writeCollapsedDaysLocal(keys = [...state.collapsedDays]) {
+  try {
+    localStorage.setItem(
+      COLLAPSED_DAYS_STORAGE_KEY,
+      JSON.stringify(normalizeCollapsedDayKeys(keys)),
+    );
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+function loadCollapsedDaysFromLocal() {
+  try {
+    const raw = localStorage.getItem(COLLAPSED_DAYS_STORAGE_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return new Set(normalizeCollapsedDayKeys(parsed));
+  } catch {
+    return new Set();
+  }
+}
+
+async function loadCollapsedDaysFromSupabase() {
+  const { data, error } = await supabase
+    .from("habit_ui_settings")
+    .select("collapsed_days")
+    .eq("id", 1)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  return new Set(normalizeCollapsedDayKeys(data.collapsed_days));
+}
+
+async function persistCollapsedDaysToSupabase(keys = [...state.collapsedDays]) {
+  const collapsed_days = normalizeCollapsedDayKeys(keys);
+  const { error } = await supabase.from("habit_ui_settings").upsert({
+    id: 1,
+    collapsed_days,
+    updated_at: new Date().toISOString(),
+  });
+  if (error) throw error;
+}
+
+async function loadCollapsedDays() {
+  const local = loadCollapsedDaysFromLocal();
+  try {
+    const remote = await loadCollapsedDaysFromSupabase();
+    if (remote) {
+      // First sync after this feature: keep any local folds if remote is still empty.
+      if (local.size > 0 && remote.size === 0) {
+        await persistCollapsedDaysToSupabase([...local]);
+        writeCollapsedDaysLocal([...local]);
+        return local;
+      }
+      writeCollapsedDaysLocal([...remote]);
+      return remote;
+    }
+  } catch (err) {
+    console.error("Failed to load collapsed days from Supabase:", err);
+  }
+  return local;
+}
+
+function saveCollapsedDays() {
+  writeCollapsedDaysLocal();
+  if (collapsedDaysPersistTimer) clearTimeout(collapsedDaysPersistTimer);
+  collapsedDaysPersistTimer = setTimeout(() => {
+    collapsedDaysPersistTimer = null;
+    const snapshot = [...state.collapsedDays];
+    collapsedDaysPersistChain = collapsedDaysPersistChain
+      .then(() => persistCollapsedDaysToSupabase(snapshot))
+      .catch((err) =>
+        console.error("Failed to save collapsed days to Supabase:", err),
+      );
+  }, PERSIST_DEBOUNCE_MS);
+}
+
+function isDayCollapsed(dayKey) {
+  return state.collapsedDays.has(dayKey);
+}
+
+function toggleDayCollapsed(dayKey) {
+  if (state.collapsedDays.has(dayKey)) {
+    state.collapsedDays.delete(dayKey);
+  } else {
+    state.collapsedDays.add(dayKey);
+  }
+  saveCollapsedDays();
 }
 
 // --- Date header editing ---
@@ -1089,14 +1380,19 @@ function mountDateEditor() {
     });
   });
 
-  cell.replaceChildren(input);
+  const dateBtn = cell.querySelector(".day-date-btn");
+  if (dateBtn) {
+    dateBtn.replaceWith(input);
+  } else {
+    cell.prepend(input);
+  }
   queueMicrotask(() => {
     input.focus();
     input.select();
   });
 }
 
-function bindDateEditors() {
+function bindDayHeaderControls() {
   logEl.querySelectorAll(".day-date-btn").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();
@@ -1104,6 +1400,17 @@ function bindDateEditors() {
       const dayKey = button.dataset.day;
       if (!dayKey) return;
       openDateEditor(dayKey);
+    });
+  });
+
+  logEl.querySelectorAll(".day-collapse-btn").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const dayKey = button.dataset.day;
+      if (!dayKey) return;
+      toggleDayCollapsed(dayKey);
+      renderRows();
     });
   });
 }
@@ -1145,7 +1452,7 @@ function showTimestampPopup(clientX, clientY, entry) {
 
   const date = new Date(entry?.loggedAt);
   const timeLabel = Number.isNaN(date.getTime()) ? "—" : formatClock24(date);
-  const actualLabel = formatExactDuration(entrySeconds(entry));
+  const seconds = entrySeconds(entry);
 
   const popup = document.createElement("div");
   popup.className = "timestamp-popup";
@@ -1154,12 +1461,16 @@ function showTimestampPopup(clientX, clientY, entry) {
   const timeEl = document.createElement("div");
   timeEl.className = "timestamp-popup-time";
   timeEl.textContent = timeLabel;
+  popup.append(timeEl);
 
-  const actualEl = document.createElement("div");
-  actualEl.className = "timestamp-popup-actual";
-  actualEl.textContent = actualLabel;
+  // Exact duration is only useful when the log says "Less than a minute".
+  if (seconds < 60) {
+    const actualEl = document.createElement("div");
+    actualEl.className = "timestamp-popup-actual";
+    actualEl.textContent = formatExactDuration(seconds);
+    popup.append(actualEl);
+  }
 
-  popup.append(timeEl, actualEl);
   document.body.appendChild(popup);
 
   const pad = 8;
@@ -1265,6 +1576,7 @@ function deleteEntry(dayKey, rowIndex, entryIndex) {
   }
   if (rows.length === 0) {
     delete state.days[dayKey];
+    if (state.collapsedDays.delete(dayKey)) saveCollapsedDays();
   }
 
   if (bookId) {
@@ -1483,8 +1795,23 @@ function onDurationMouseLeave() {
 
 // --- Composer / Reading UI ---
 
+/** The dropdown's option values are category ids, so renames don't disturb it. */
+function syncCategoryOptions() {
+  const selectedId = categorySelect.value;
+  categorySelect.replaceChildren();
+  for (const category of sortedCategories()) {
+    const option = document.createElement("option");
+    option.value = category.id;
+    option.textContent = category.name;
+    categorySelect.append(option);
+  }
+  categorySelect.value = categoryById(selectedId)
+    ? selectedId
+    : (sortedCategories()[0]?.id ?? "");
+}
+
 function isReadingCategory() {
-  return categorySelect.value === "Reading";
+  return categorySelect.value === READING_CATEGORY_ID;
 }
 
 function updateProgressUI() {
@@ -1596,7 +1923,7 @@ function renderDayTable(dayKey, rows) {
               : "";
           return `
             <div class="duration-entry-wrap" data-day="${dayKey}" data-row="${index}" data-entry="${i}">
-              <button type="button" class="duration-entry" data-day="${dayKey}" data-row="${index}" data-entry="${i}" data-logged-at="${escapeHtml(entry.loggedAt)}">${escapeHtml(formatEntryLabel(row, entry))}</button>
+              <button type="button" class="duration-entry" data-day="${dayKey}" data-row="${index}" data-entry="${i}" data-logged-at="${escapeHtml(entry.loggedAt)}">${escapeHtml(formatEntryLabel(entry))}</button>
               ${noteHtml}
             </div>
           `;
@@ -1612,13 +1939,11 @@ function renderDayTable(dayKey, rows) {
       return `
         <tr
           class="log-row"
-          draggable="true"
           data-day="${dayKey}"
           data-index="${index}"
         >
           <td>
             <div class="category-label">
-              <span class="drag-hint" aria-hidden="true">⠿</span>
               <span>${escapeHtml(row.category)}</span>
             </div>
           </td>
@@ -1633,18 +1958,37 @@ function renderDayTable(dayKey, rows) {
     })
     .join("");
 
+  const collapsed = isDayCollapsed(dayKey);
+  const dayTotal = dayTotalSeconds(rows);
+
   return `
-    <table class="log-table" data-day="${dayKey}" aria-label="Daily activity log for ${escapeHtml(dateLabel)}">
+    <table class="log-table${collapsed ? " is-collapsed" : ""}" data-day="${dayKey}" aria-label="Daily activity log for ${escapeHtml(dateLabel)}">
       <thead>
         <tr>
           <th scope="col" class="day-date-cell" data-day="${dayKey}">
             <button type="button" class="day-date-btn" data-day="${dayKey}" title="Edit date">${escapeHtml(dateLabel)}</button>
+            <button
+              type="button"
+              class="day-collapse-btn"
+              data-day="${dayKey}"
+              aria-expanded="${collapsed ? "false" : "true"}"
+              aria-label="${collapsed ? "Show" : "Hide"} entries for ${escapeHtml(dateLabel)}"
+            ><span class="day-collapse-caret" aria-hidden="true">▾</span></button>
           </th>
           <th scope="col">${escapeHtml(solLabel)}</th>
           <th scope="col">Total time</th>
         </tr>
       </thead>
       <tbody>${bodyHtml}</tbody>
+      <tfoot>
+        <tr class="day-total-row">
+          <td></td>
+          <td></td>
+          <td>
+            <div class="day-total" title="Total for this day">${escapeHtml(formatLoggedDuration(dayTotal))}</div>
+          </td>
+        </tr>
+      </tfoot>
     </table>
   `;
 }
@@ -1666,9 +2010,8 @@ function renderRows() {
   logEl.hidden = false;
   logEl.innerHTML = dayKeys.map((key) => renderDayTable(key, state.days[key])).join("");
 
-  bindDragHandlers();
   bindDurationInteractions();
-  bindDateEditors();
+  bindDayHeaderControls();
   mountDateEditor();
   mountNoteComposer();
   syncEntryHeights();
@@ -1698,7 +2041,6 @@ function bindDurationInteractions() {
     button.addEventListener("mousemove", onDurationMouseMove);
     button.addEventListener("mouseleave", onDurationMouseLeave);
     button.addEventListener("mousedown", (event) => event.stopPropagation());
-    button.addEventListener("dragstart", (event) => event.preventDefault());
   });
 
   logEl.querySelectorAll(".duration-note").forEach((noteEl) => {
@@ -1716,92 +2058,19 @@ function bindDurationInteractions() {
   });
 }
 
-function bindDragHandlers() {
-  const rowNodes = logEl.querySelectorAll(".log-row");
-
-  rowNodes.forEach((row) => {
-    row.addEventListener("dragstart", onDragStart);
-    row.addEventListener("dragend", onDragEnd);
-    row.addEventListener("dragover", onDragOver);
-    row.addEventListener("dragleave", onDragLeave);
-    row.addEventListener("drop", onDrop);
-  });
-}
-
-function onDragStart(event) {
-  if (
-    event.target.closest(".duration-entry") ||
-    event.target.closest(".duration-note-composer") ||
-    event.target.closest(".duration-note")
-  ) {
-    event.preventDefault();
-    return;
-  }
-  const dayKey = event.currentTarget.dataset.day;
-  const index = Number(event.currentTarget.dataset.index);
-  state.dragDayKey = dayKey;
-  state.dragIndex = index;
-  event.currentTarget.classList.add("is-dragging");
-  event.dataTransfer.effectAllowed = "move";
-  event.dataTransfer.setData("text/plain", `${dayKey}:${index}`);
-}
-
-function onDragEnd(event) {
-  event.currentTarget.classList.remove("is-dragging");
-  logEl
-    .querySelectorAll(".is-drag-over")
-    .forEach((el) => el.classList.remove("is-drag-over"));
-  state.dragDayKey = null;
-  state.dragIndex = null;
-}
-
-function onDragOver(event) {
-  event.preventDefault();
-  event.dataTransfer.dropEffect = "move";
-  event.currentTarget.classList.add("is-drag-over");
-}
-
-function onDragLeave(event) {
-  event.currentTarget.classList.remove("is-drag-over");
-}
-
-function onDrop(event) {
-  event.preventDefault();
-  const dayKey = event.currentTarget.dataset.day;
-  const toIndex = Number(event.currentTarget.dataset.index);
-  const fromIndex = state.dragIndex;
-  const fromDay = state.dragDayKey;
-
-  event.currentTarget.classList.remove("is-drag-over");
-
-  if (
-    !dayKey ||
-    fromDay !== dayKey ||
-    fromIndex === null ||
-    Number.isNaN(toIndex) ||
-    fromIndex === toIndex
-  ) {
-    return;
-  }
-
-  const rows = rowsFor(dayKey);
-  const [moved] = rows.splice(fromIndex, 1);
-  rows.splice(toIndex, 0, moved);
-  renderRows();
-}
-
-function commitDuration(category, totalSeconds) {
-  if (!CATEGORIES.includes(category) || !Number.isFinite(totalSeconds) || totalSeconds < 1) {
+function commitDuration(categoryId, totalSeconds) {
+  const category = categoryById(categoryId);
+  if (!category || !Number.isFinite(totalSeconds) || totalSeconds < 1) {
     return false;
   }
 
   const seconds = Math.floor(totalSeconds);
   const minutes = Math.floor(seconds / 60);
 
-  if (category === "Reading") {
+  if (categoryId === READING_CATEGORY_ID) {
     const book = getActiveBook();
     if (!book) {
-      categorySelect.value = "Reading";
+      categorySelect.value = READING_CATEGORY_ID;
       updateComposerMode();
       openBookDialog("new");
       return false;
@@ -1811,7 +2080,7 @@ function commitDuration(category, totalSeconds) {
     const pageTo = parsePageNumber(pageToInput.value);
 
     if (pageFrom === null) {
-      categorySelect.value = "Reading";
+      categorySelect.value = READING_CATEGORY_ID;
       updateComposerMode();
       pageFromInput.setCustomValidity("Enter a start page");
       pageFromInput.reportValidity();
@@ -1819,7 +2088,7 @@ function commitDuration(category, totalSeconds) {
     }
 
     if (pageTo === null) {
-      categorySelect.value = "Reading";
+      categorySelect.value = READING_CATEGORY_ID;
       updateComposerMode();
       pageToInput.setCustomValidity("Enter an end page");
       pageToInput.reportValidity();
@@ -1827,7 +2096,7 @@ function commitDuration(category, totalSeconds) {
     }
 
     if (pageFrom > pageTo) {
-      categorySelect.value = "Reading";
+      categorySelect.value = READING_CATEGORY_ID;
       updateComposerMode();
       pageToInput.setCustomValidity("End page must be ≥ start");
       pageToInput.reportValidity();
@@ -1835,7 +2104,7 @@ function commitDuration(category, totalSeconds) {
     }
 
     if (pageTo > book.totalPages || pageFrom > book.totalPages) {
-      categorySelect.value = "Reading";
+      categorySelect.value = READING_CATEGORY_ID;
       updateComposerMode();
       pageToInput.setCustomValidity(`Book only has ${book.totalPages} pages`);
       pageToInput.reportValidity();
@@ -1845,7 +2114,7 @@ function commitDuration(category, totalSeconds) {
     pageToInput.setCustomValidity("");
     pageFromInput.setCustomValidity("");
 
-    upsertDuration(category, {
+    upsertDuration(category.name, {
       minutes,
       seconds,
       loggedAt: new Date().toISOString(),
@@ -1862,7 +2131,7 @@ function commitDuration(category, totalSeconds) {
     return true;
   }
 
-  upsertDuration(category, {
+  upsertDuration(category.name, {
     minutes,
     seconds,
     loggedAt: new Date().toISOString(),
@@ -1874,10 +2143,10 @@ function commitDuration(category, totalSeconds) {
 function onSubmit(event) {
   event.preventDefault();
 
-  const category = categorySelect.value.trim();
+  const categoryId = categorySelect.value;
   const raw = durationInput.value.trim();
 
-  if (!CATEGORIES.includes(category) || !raw) {
+  if (!categoryById(categoryId) || !raw) {
     return;
   }
 
@@ -1889,7 +2158,7 @@ function onSubmit(event) {
   }
   durationInput.setCustomValidity("");
 
-  if (!commitDuration(category, seconds)) return;
+  if (!commitDuration(categoryId, seconds)) return;
 
   durationInput.value = "";
   durationInput.focus();
@@ -2015,6 +2284,7 @@ window.addEventListener("resize", () => {
 
 state.days = {};
 state.books = emptyBooksState();
+state.collapsedDays = loadCollapsedDaysFromLocal();
 activeDayKey = localDayKey();
 
 function onPossibleDayChange() {
@@ -2044,6 +2314,7 @@ const nextBookPasteBtn = document.getElementById("next-book-paste");
 const openThresholdInput = document.getElementById("open-threshold-input");
 const openThresholdUpdateBtn = document.getElementById("open-threshold-update");
 const thresholdHistoryEl = document.getElementById("threshold-history");
+const categoryEditorEl = document.getElementById("category-editor");
 
 const MIN_STOPWATCHES = 1;
 const MAX_STOPWATCHES = 4;
@@ -2084,6 +2355,90 @@ function setActiveSideTab(tabId) {
     closeTransferMenus();
     hideStopwatchReadingFields();
     hideStopwatchAdjustPicker();
+  }
+  if (tabId !== "categories") {
+    // Drop any half-typed rename so the panel reopens showing saved names.
+    renderCategoryEditor();
+  }
+}
+
+/* —— Category renaming panel —— */
+
+function showCategoryNameError(row, message) {
+  const error = row.querySelector(".category-error");
+  if (!error) return;
+  error.textContent = message || "";
+  error.hidden = !message;
+  row.classList.toggle("has-error", Boolean(message));
+}
+
+function commitCategoryRename(id, input, row) {
+  const category = categoryById(id);
+  if (!category) return;
+
+  const nextName = normalizeCategoryName(input.value);
+  if (nextName === category.name) {
+    input.value = category.name;
+    showCategoryNameError(row, "");
+    return;
+  }
+
+  const error = categoryNameError(id, nextName);
+  if (error) {
+    showCategoryNameError(row, error);
+    return;
+  }
+
+  showCategoryNameError(row, "");
+  if (!renameCategory(id, nextName)) return;
+
+  syncCategoryOptions();
+  buildTransferMenus();
+  renderCategoryEditor();
+  renderRows();
+  updateComposerMode();
+}
+
+function renderCategoryEditor() {
+  if (!categoryEditorEl) return;
+  categoryEditorEl.replaceChildren();
+
+  for (const category of sortedCategories()) {
+    const row = document.createElement("div");
+    row.className = "category-editor-row";
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "composer-input category-name-input";
+    input.value = category.name;
+    input.maxLength = MAX_CATEGORY_NAME_LENGTH;
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    input.setAttribute("aria-label", `Rename ${category.name}`);
+
+    const error = document.createElement("p");
+    error.className = "category-error";
+    error.hidden = true;
+
+    input.addEventListener("input", () => showCategoryNameError(row, ""));
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        commitCategoryRename(category.id, input, row);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        input.value = categoryById(category.id)?.name ?? "";
+        showCategoryNameError(row, "");
+      }
+    });
+    input.addEventListener("blur", () => {
+      commitCategoryRename(category.id, input, row);
+    });
+
+    row.append(input, error);
+    categoryEditorEl.append(row);
   }
 }
 
@@ -2277,13 +2632,13 @@ function buildOneTransferMenu(sw) {
   const menu = sw.root?.querySelector(".stopwatch-transfer-menu");
   if (!menu) return;
   menu.replaceChildren();
-  for (const category of CATEGORIES) {
+  for (const category of sortedCategories()) {
     const option = document.createElement("button");
     option.type = "button";
     option.className = "stopwatch-transfer-option";
     option.setAttribute("role", "menuitem");
-    option.dataset.category = category;
-    option.textContent = category;
+    option.dataset.categoryId = category.id;
+    option.textContent = category.name;
     menu.append(option);
   }
 }
@@ -2815,7 +3170,7 @@ function showReadingTransferFields(sw) {
 
   if (!getActiveBook()) {
     pendingReadingTransferId = sw.id;
-    categorySelect.value = "Reading";
+    categorySelect.value = READING_CATEGORY_ID;
     updateComposerMode();
     openBookDialog("new");
     return;
@@ -2901,10 +3256,10 @@ function completeReadingTransfer(sw) {
   // Keep composer page fields in sync for the shared Reading flow.
   pageFromInput.value = String(pageFrom);
   pageToInput.value = String(pageTo);
-  categorySelect.value = "Reading";
+  categorySelect.value = READING_CATEGORY_ID;
   updateComposerMode();
 
-  if (!commitDuration("Reading", seconds)) return;
+  if (!commitDuration(READING_CATEGORY_ID, seconds)) return;
 
   hideStopwatchReadingFields();
   resetStopwatch(sw);
@@ -2934,8 +3289,8 @@ function buildTransferMenus() {
   }
 }
 
-function transferStopwatch(sw, category) {
-  if (category === "Reading") {
+function transferStopwatch(sw, categoryId) {
+  if (categoryId === READING_CATEGORY_ID) {
     if (sw.running) stopStopwatch(sw);
     showReadingTransferFields(sw);
     return;
@@ -2960,7 +3315,7 @@ function transferStopwatch(sw, category) {
     return;
   }
 
-  if (!commitDuration(category, seconds)) {
+  if (!commitDuration(categoryId, seconds)) {
     closeTransferMenus();
     return;
   }
@@ -3042,7 +3397,7 @@ if (timersPanel) {
       event.stopPropagation();
       const root = option.closest("[data-stopwatch]");
       const sw = stopwatches[Number(root?.dataset.stopwatch)];
-      if (sw) transferStopwatch(sw, option.dataset.category);
+      if (sw) transferStopwatch(sw, option.dataset.categoryId);
       return;
     }
 
@@ -3178,10 +3533,32 @@ async function flushAllPendingPersists() {
         console.error("Failed to save stopwatches to Supabase:", err),
       );
   }
+  if (categoriesPersistTimer) {
+    clearTimeout(categoriesPersistTimer);
+    categoriesPersistTimer = null;
+    const snapshot = structuredClone(state.categories);
+    categoriesPersistChain = categoriesPersistChain
+      .then(() => persistCategoriesToSupabase(snapshot))
+      .catch((err) =>
+        console.error("Failed to save categories to Supabase:", err),
+      );
+  }
+  if (collapsedDaysPersistTimer) {
+    clearTimeout(collapsedDaysPersistTimer);
+    collapsedDaysPersistTimer = null;
+    const snapshot = [...state.collapsedDays];
+    collapsedDaysPersistChain = collapsedDaysPersistChain
+      .then(() => persistCollapsedDaysToSupabase(snapshot))
+      .catch((err) =>
+        console.error("Failed to save collapsed days to Supabase:", err),
+      );
+  }
   await Promise.all([
     daysPersistChain,
     booksPersistChain,
     stopwatchesPersistChain,
+    categoriesPersistChain,
+    collapsedDaysPersistChain,
   ]);
 }
 
@@ -3202,9 +3579,13 @@ async function migrateFromLocalStorageIfNeeded() {
   const localDays = loadDaysFromLocal();
   const localBooks = loadBooksFromLocal();
   const localStopwatches = loadStopwatchesFromLocal();
+  const localCategories = loadCategoriesFromLocal();
+  const localCollapsedDays = loadCollapsedDaysFromLocal();
   const hasLocal =
     Object.keys(localDays).length > 0 ||
     localBooks.books.length > 0 ||
+    categoriesAreCustomized(localCategories) ||
+    localCollapsedDays.size > 0 ||
     (Array.isArray(localStopwatches) &&
       localStopwatches.some(
         (entry) =>
@@ -3220,8 +3601,12 @@ async function migrateFromLocalStorageIfNeeded() {
   console.info("Migrating localStorage → Supabase…");
   state.days = localDays;
   state.books = localBooks;
+  state.categories = localCategories;
+  state.collapsedDays = localCollapsedDays;
   await persistDaysToSupabase(localDays);
   await persistBooksToSupabase(localBooks);
+  await persistCategoriesToSupabase(localCategories);
+  await persistCollapsedDaysToSupabase([...localCollapsedDays]);
   if (Array.isArray(localStopwatches)) {
     await persistStopwatchesToSupabase(localStopwatches);
   }
@@ -3237,6 +3622,8 @@ async function boot() {
 
   state.days = await loadDays();
   state.books = await loadBooks();
+  state.categories = await loadCategories();
+  state.collapsedDays = await loadCollapsedDays();
   activeDayKey = localDayKey();
   // Persist any legacy flat-array reshape still sitting in memory/local.
   writeDaysLocal();
@@ -3246,6 +3633,8 @@ async function boot() {
       .catch((err) => console.error("Failed to save days to Supabase:", err));
   }
 
+  syncCategoryOptions();
+  renderCategoryEditor();
   renderRows();
   updateComposerMode();
   if (isReadingCategory() && getActiveBook()) {
@@ -3257,6 +3646,8 @@ async function boot() {
   await restoreStopwatches();
   stopwatches.forEach(renderStopwatch);
   restoreBridgeStopwatch();
+  // Rebuild transfer menus after categories (and stopwatches) are ready.
+  buildTransferMenus();
   durationInput.focus();
 }
 
@@ -3270,6 +3661,10 @@ document.addEventListener("visibilitychange", () => {
     void flushAllPendingPersists();
   }
 });
+
+state.categories = loadCategoriesFromLocal();
+syncCategoryOptions();
+renderCategoryEditor();
 
 boot();
 

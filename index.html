@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Daily Log</title>
-    <link rel="stylesheet" href="styles.css?v=bridge-stopwatch" />
+    <link rel="stylesheet" href="styles.css?v=collapse-date-only" />
   </head>
   <body>
     <main class="app">
@@ -29,13 +29,8 @@
 
       <form id="composer" class="composer" autocomplete="off">
         <label class="sr-only" for="category">Category</label>
-        <select id="category" class="composer-category" name="category" required>
-          <option value="Drafts to Drive">Drafts to Drive</option>
-          <option value="Programming • Figma • CAD">Programming • Figma • CAD</option>
-          <option value="School">School</option>
-          <option value="Reading">Reading</option>
-          <option value="TDs">TDs</option>
-        </select>
+        <!-- Options are built from the saved categories in script.js. -->
+        <select id="category" class="composer-category" name="category" required></select>
 
         <div id="composer-fields" class="composer-fields">
           <label class="sr-only" for="duration">Duration</label>
@@ -245,6 +240,20 @@
             <ul id="threshold-history" class="threshold-history" aria-label="Threshold update history"></ul>
           </div>
         </div>
+
+        <div
+          id="panel-categories"
+          class="side-panel side-panel-categories"
+          role="tabpanel"
+          aria-labelledby="tab-categories"
+          data-panel="categories"
+          hidden
+        >
+          <p class="category-editor-hint">
+            Rename a category. Logged entries update to match.
+          </p>
+          <div id="category-editor" class="category-editor"></div>
+        </div>
       </div>
 
       <div class="side-tabs" role="tablist" aria-orientation="vertical" aria-label="Tool tabs">
@@ -271,11 +280,23 @@
         >
           <span class="side-tab-label">Next book</span>
         </button>
+        <button
+          type="button"
+          class="side-tab"
+          role="tab"
+          id="tab-categories"
+          aria-controls="panel-categories"
+          aria-selected="false"
+          data-tab="categories"
+          tabindex="-1"
+        >
+          <span class="side-tab-label">Categories</span>
+        </button>
       </div>
     </aside>
 
     <script src="vendor/supabase.js"></script>
     <script src="supabase-config.js"></script>
-    <script src="script.js?v=bridge-stopwatch"></script>
+    <script src="script.js?v=hover-subminute-only"></script>
   </body>
 </html>
