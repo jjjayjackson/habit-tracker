@@ -514,8 +514,8 @@ function bookFromRow(row) {
 async function loadBooksFromSupabase() {
   const [{ data: bookRows, error: booksError }, { data: settings, error: settingsError }] =
     await Promise.all([
-      supabase.from("books").select("*").order("created_at", { ascending: true }),
-      supabase.from("reading_settings").select("*").eq("id", 1).maybeSingle(),
+      supabase.from("habit_tracker_books").select("*").order("created_at", { ascending: true }),
+      supabase.from("habit_tracker_reading_settings").select("*").eq("id", 1).maybeSingle(),
     ]);
 
   if (booksError) throw booksError;
@@ -559,7 +559,7 @@ async function loadBooks() {
 async function persistBooksToSupabase(booksState = state.books) {
   const desiredIds = new Set(booksState.books.map((b) => b.id));
   const { data: existing, error: existingError } = await supabase
-    .from("books")
+    .from("habit_tracker_books")
     .select("id");
   if (existingError) throw existingError;
 
@@ -568,7 +568,7 @@ async function persistBooksToSupabase(booksState = state.books) {
     .filter((id) => !desiredIds.has(id));
   if (toDelete.length > 0) {
     const { error: deleteError } = await supabase
-      .from("books")
+      .from("habit_tracker_books")
       .delete()
       .in("id", toDelete);
     if (deleteError) throw deleteError;
@@ -576,12 +576,12 @@ async function persistBooksToSupabase(booksState = state.books) {
 
   if (booksState.books.length > 0) {
     const { error: upsertError } = await supabase
-      .from("books")
+      .from("habit_tracker_books")
       .upsert(booksState.books.map(bookRowFromState));
     if (upsertError) throw upsertError;
   }
 
-  const { error: settingsError } = await supabase.from("reading_settings").upsert({
+  const { error: settingsError } = await supabase.from("habit_tracker_reading_settings").upsert({
     id: 1,
     active_book_id: booksState.activeBookId,
     next_book_url: booksState.nextBookUrl || "",
@@ -778,7 +778,7 @@ function loadCategoriesFromLocal() {
 
 async function loadCategoriesFromSupabase() {
   const { data, error } = await supabase
-    .from("categories")
+    .from("habit_tracker_categories")
     .select("id, name")
     .order("id", { ascending: true });
   if (error) throw error;
@@ -793,7 +793,7 @@ async function persistCategoriesToSupabase(categories = state.categories) {
     name: category.name,
     updated_at: now,
   }));
-  const { error } = await supabase.from("categories").upsert(rows);
+  const { error } = await supabase.from("habit_tracker_categories").upsert(rows);
   if (error) throw error;
 }
 
@@ -1062,7 +1062,7 @@ function writeDaysLocal(days = state.days) {
 
 async function loadDaysFromSupabase() {
   const { data, error } = await supabase
-    .from("habit_log_days")
+    .from("habit_tracker_log_days")
     .select("day_key, rows");
   if (error) throw error;
   if (!data || data.length === 0) return null;
@@ -1098,7 +1098,7 @@ async function persistDaysToSupabase(days = state.days) {
   const keepKeys = Object.keys(payload);
 
   const { data: existing, error: existingError } = await supabase
-    .from("habit_log_days")
+    .from("habit_tracker_log_days")
     .select("day_key");
   if (existingError) throw existingError;
 
@@ -1113,7 +1113,7 @@ async function persistDaysToSupabase(days = state.days) {
 
   if (toDelete.length > 0) {
     const { error: deleteError } = await supabase
-      .from("habit_log_days")
+      .from("habit_tracker_log_days")
       .delete()
       .in("day_key", toDelete);
     if (deleteError) throw deleteError;
@@ -1128,7 +1128,7 @@ async function persistDaysToSupabase(days = state.days) {
     updated_at: now,
   }));
   const { error: upsertError } = await supabase
-    .from("habit_log_days")
+    .from("habit_tracker_log_days")
     .upsert(rows);
   if (upsertError) throw upsertError;
 }
@@ -1231,7 +1231,7 @@ function loadCollapsedDaysFromLocal() {
 
 async function loadCollapsedDaysFromSupabase() {
   const { data, error } = await supabase
-    .from("habit_ui_settings")
+    .from("habit_tracker_ui_settings")
     .select("collapsed_days")
     .eq("id", 1)
     .maybeSingle();
@@ -1242,7 +1242,7 @@ async function loadCollapsedDaysFromSupabase() {
 
 async function persistCollapsedDaysToSupabase(keys = [...state.collapsedDays]) {
   const collapsed_days = normalizeCollapsedDayKeys(keys);
-  const { error } = await supabase.from("habit_ui_settings").upsert({
+  const { error } = await supabase.from("habit_tracker_ui_settings").upsert({
     id: 1,
     collapsed_days,
     updated_at: new Date().toISOString(),
@@ -2881,7 +2881,7 @@ function loadStopwatchesFromLocal() {
 
 async function loadStopwatchesFromSupabase() {
   const { data, error } = await supabase
-    .from("stopwatches")
+    .from("habit_tracker_stopwatches")
     .select("id, elapsed_ms, running, started_at")
     .order("id", { ascending: true });
   if (error) throw error;
@@ -2939,12 +2939,12 @@ async function persistStopwatchesToSupabase(payload) {
         : null,
     updated_at: now,
   }));
-  const { error } = await supabase.from("stopwatches").upsert(rows);
+  const { error } = await supabase.from("habit_tracker_stopwatches").upsert(rows);
   if (error) throw error;
 
   // Drop orphaned rows when the user removed a stopwatch.
   const { error: deleteError } = await supabase
-    .from("stopwatches")
+    .from("habit_tracker_stopwatches")
     .delete()
     .gte("id", payload.length);
   if (deleteError) throw deleteError;
@@ -3566,9 +3566,9 @@ async function remoteHasHabitData() {
   const [{ count: dayCount, error: dayError }, { count: bookCount, error: bookError }] =
     await Promise.all([
       supabase
-        .from("habit_log_days")
+        .from("habit_tracker_log_days")
         .select("day_key", { count: "exact", head: true }),
-      supabase.from("books").select("id", { count: "exact", head: true }),
+      supabase.from("habit_tracker_books").select("id", { count: "exact", head: true }),
     ]);
   if (dayError) throw dayError;
   if (bookError) throw bookError;
