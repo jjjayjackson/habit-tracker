@@ -1,7 +1,7 @@
 /**
- * Categories are renameable, so every lookup goes through a fixed `id` while the
- * `name` is only ever a label. Ids must never change — the Reading page-tracking
- * flow and the saved dropdown selection both key off them.
+ * Categories are renameable / addable / deletable. Lookups go through a stable
+ * `id` while `name` is only a label. The Reading id is fixed forever — page
+ * tracking and transfer menus key off it — so that category can't be deleted.
  */
 const DEFAULT_CATEGORIES = [
   { id: "drafts-to-drive", name: "Drafts to Drive" },
@@ -12,6 +12,7 @@ const DEFAULT_CATEGORIES = [
 ];
 const READING_CATEGORY_ID = "reading";
 const MAX_CATEGORY_NAME_LENGTH = 40;
+const MIN_CATEGORIES = 1;
 
 const SOL_EPOCH = { month: 4, day: 22 }; // May 22 (0-indexed month)
 const STORAGE_KEY = "habit-tracker-mvp:rows";
@@ -84,6 +85,13 @@ const bookDialog = document.getElementById("book-dialog");
 const bookDialogForm = document.getElementById("book-dialog-form");
 const bookDialogTitle = document.getElementById("book-dialog-title");
 const bookTotalPagesInput = document.getElementById("book-total-pages");
+const transferNoteDialog = document.getElementById("transfer-note-dialog");
+const transferNoteForm = document.getElementById("transfer-note-form");
+const transferNoteSummary = document.getElementById("transfer-note-summary");
+const transferNoteInput = document.getElementById("transfer-note-input");
+const transferNoteSkipBtn = document.getElementById("transfer-note-skip");
+const transferNoteCancelBtn = document.getElementById("transfer-note-cancel");
+const transferNoteWarning = document.getElementById("transfer-note-warning");
 
 let timestampPopupEl = null;
 let contextMenuEl = null;
@@ -96,6 +104,8 @@ let dateEditingKey = null; // "YYYY-MM-DD"
 let dateDraft = "";
 let dateEditorDiscarding = false;
 let activeDayKey = null;
+/** Pending stopwatch transfer waiting on the note dialog. */
+let pendingTransfer = null;
 
 function formatDate(date) {
   const m = date.getMonth() + 1;
@@ -726,34 +736,58 @@ function normalizeCategoryName(raw) {
   return typeof raw === "string" ? raw.trim().replace(/\s+/g, " ") : "";
 }
 
-/** Saved names are merged onto the defaults by id, so the set of categories is fixed. */
-function mergeCategoryEntries(entries) {
-  const savedNames = new Map();
-  for (const entry of entries || []) {
-    if (!entry || typeof entry.id !== "string") continue;
+function newCategoryId() {
+  return `cat-${crypto.randomUUID()}`;
+}
+
+/**
+ * Accept the saved list as-is (adds + deletes stick). Reading is always kept so
+ * page tracking still has a category to hang onto. Older saves that only stored
+ * renames of the default five still load cleanly.
+ */
+function normalizeCategoryEntries(entries) {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return defaultCategories();
+  }
+
+  const loaded = [];
+  const seenIds = new Set();
+  const seenNames = new Set();
+
+  for (const entry of entries) {
+    if (!entry || typeof entry.id !== "string" || !entry.id) continue;
     const name = normalizeCategoryName(entry.name);
-    if (name) savedNames.set(entry.id, name);
+    if (!name || name.length > MAX_CATEGORY_NAME_LENGTH) continue;
+    if (seenIds.has(entry.id) || seenNames.has(name)) continue;
+    seenIds.add(entry.id);
+    seenNames.add(name);
+    loaded.push({ id: entry.id, name });
   }
 
-  const loaded = defaultCategories().map((category) => ({
-    ...category,
-    name: savedNames.get(category.id) || category.name,
-  }));
+  if (loaded.length === 0) return defaultCategories();
 
-  // A duplicate name would make two categories share one logged row.
-  const seen = new Set();
-  for (const category of loaded) {
-    if (seen.has(category.name)) {
-      category.name = DEFAULT_CATEGORIES.find((d) => d.id === category.id).name;
+  if (!loaded.some((category) => category.id === READING_CATEGORY_ID)) {
+    const readingDefault = DEFAULT_CATEGORIES.find(
+      (category) => category.id === READING_CATEGORY_ID,
+    );
+    let name = readingDefault.name;
+    if (seenNames.has(name)) {
+      let n = 2;
+      while (seenNames.has(`${name} ${n}`)) n += 1;
+      name = `${name} ${n}`;
     }
-    seen.add(category.name);
+    loaded.push({ id: READING_CATEGORY_ID, name });
   }
+
   return loaded;
 }
 
 function categoriesAreCustomized(categories) {
+  if (!categories || categories.length !== DEFAULT_CATEGORIES.length) return true;
   const defaults = new Map(DEFAULT_CATEGORIES.map((c) => [c.id, c.name]));
-  return (categories || []).some((c) => defaults.get(c.id) !== c.name);
+  return categories.some(
+    (c) => !defaults.has(c.id) || defaults.get(c.id) !== c.name,
+  );
 }
 
 function writeCategoriesLocal(categories = state.categories) {
@@ -770,7 +804,7 @@ function loadCategoriesFromLocal() {
     if (!raw) return defaultCategories();
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return defaultCategories();
-    return mergeCategoryEntries(parsed);
+    return normalizeCategoryEntries(parsed);
   } catch {
     return defaultCategories();
   }
@@ -783,7 +817,7 @@ async function loadCategoriesFromSupabase() {
     .order("id", { ascending: true });
   if (error) throw error;
   if (!data || data.length === 0) return null;
-  return mergeCategoryEntries(data);
+  return normalizeCategoryEntries(data);
 }
 
 async function persistCategoriesToSupabase(categories = state.categories) {
@@ -793,8 +827,29 @@ async function persistCategoriesToSupabase(categories = state.categories) {
     name: category.name,
     updated_at: now,
   }));
-  const { error } = await supabase.from("habit_tracker_categories").upsert(rows);
-  if (error) throw error;
+  const keepIds = rows.map((row) => row.id);
+
+  const { error: upsertError } = await supabase
+    .from("habit_tracker_categories")
+    .upsert(rows);
+  if (upsertError) throw upsertError;
+
+  // Drop remote rows that were deleted locally (upsert alone leaves orphans).
+  const { data: remote, error: listError } = await supabase
+    .from("habit_tracker_categories")
+    .select("id");
+  if (listError) throw listError;
+
+  const staleIds = (remote || [])
+    .map((row) => row.id)
+    .filter((id) => !keepIds.includes(id));
+  if (staleIds.length === 0) return;
+
+  const { error: deleteError } = await supabase
+    .from("habit_tracker_categories")
+    .delete()
+    .in("id", staleIds);
+  if (deleteError) throw deleteError;
 }
 
 async function loadCategories() {
@@ -881,6 +936,51 @@ function renameCategory(id, rawName) {
   saveCategories();
   relabelLoggedCategory(previousName, name);
   return true;
+}
+
+function addCategory(rawName) {
+  const name = normalizeCategoryName(rawName);
+  const error = categoryNameError(null, name);
+  if (error) return { ok: false, error };
+
+  const category = { id: newCategoryId(), name };
+  state.categories.push(category);
+  saveCategories();
+  return { ok: true, category };
+}
+
+function canDeleteCategory(id) {
+  if (id === READING_CATEGORY_ID) {
+    return { ok: false, error: "Reading can’t be deleted" };
+  }
+  if (state.categories.length <= MIN_CATEGORIES) {
+    return { ok: false, error: "Keep at least one category" };
+  }
+  if (!categoryById(id)) {
+    return { ok: false, error: "Category not found" };
+  }
+  return { ok: true, error: null };
+}
+
+/**
+ * Removes the category from the picker. Past log rows keep their stored name so
+ * history still reads correctly — they just won’t get new entries under it.
+ */
+function deleteCategory(id) {
+  const check = canDeleteCategory(id);
+  if (!check.ok) return check;
+
+  state.categories = state.categories.filter((category) => category.id !== id);
+  saveCategories();
+  return { ok: true, error: null };
+}
+
+function refreshCategoryUi() {
+  syncCategoryOptions();
+  buildTransferMenus();
+  renderCategoryEditor();
+  renderRows();
+  updateComposerMode();
 }
 
 // --- Rows / durations ---
@@ -2058,7 +2158,7 @@ function bindDurationInteractions() {
   });
 }
 
-function commitDuration(categoryId, totalSeconds) {
+function commitDuration(categoryId, totalSeconds, comment = "") {
   const category = categoryById(categoryId);
   if (!category || !Number.isFinite(totalSeconds) || totalSeconds < 1) {
     return false;
@@ -2066,6 +2166,8 @@ function commitDuration(categoryId, totalSeconds) {
 
   const seconds = Math.floor(totalSeconds);
   const minutes = Math.floor(seconds / 60);
+  const trimmedComment =
+    typeof comment === "string" ? comment.trim() : "";
 
   if (categoryId === READING_CATEGORY_ID) {
     const book = getActiveBook();
@@ -2114,14 +2216,17 @@ function commitDuration(categoryId, totalSeconds) {
     pageToInput.setCustomValidity("");
     pageFromInput.setCustomValidity("");
 
-    upsertDuration(category.name, {
+    const readingEntry = {
       minutes,
       seconds,
       loggedAt: new Date().toISOString(),
       pageFrom,
       pageTo,
       bookId: book.id,
-    });
+    };
+    if (trimmedComment) readingEntry.comment = trimmedComment;
+
+    upsertDuration(category.name, readingEntry);
     updateActiveBookBookmark(pageTo);
 
     pageToInput.value = "";
@@ -2131,11 +2236,14 @@ function commitDuration(categoryId, totalSeconds) {
     return true;
   }
 
-  upsertDuration(category.name, {
+  const entry = {
     minutes,
     seconds,
     loggedAt: new Date().toISOString(),
-  });
+  };
+  if (trimmedComment) entry.comment = trimmedComment;
+
+  upsertDuration(category.name, entry);
   renderRows();
   return true;
 }
@@ -2250,6 +2358,23 @@ document.getElementById("book-dialog-cancel").addEventListener("click", () => {
   closeBookDialog();
 });
 
+transferNoteForm.addEventListener("submit", onTransferNoteSubmit);
+transferNoteSkipBtn.addEventListener("mousedown", (event) => {
+  event.preventDefault();
+});
+transferNoteSkipBtn.addEventListener("click", onTransferNoteSkip);
+transferNoteCancelBtn.addEventListener("mousedown", (event) => {
+  event.preventDefault();
+});
+transferNoteCancelBtn.addEventListener("click", onTransferNoteCancelClick);
+document.getElementById("transfer-note-submit").addEventListener("mousedown", (event) => {
+  event.preventDefault();
+});
+transferNoteInput.addEventListener("blur", onTransferNoteInputBlur);
+transferNoteInput.addEventListener("keydown", onTransferNoteInputKeydown);
+transferNoteDialog.addEventListener("cancel", onTransferNoteDialogCancel);
+transferNoteDialog.addEventListener("close", onTransferNoteDialogClose);
+
 document.addEventListener("click", (event) => {
   if (contextMenuEl && !contextMenuEl.contains(event.target)) {
     closeContextMenu();
@@ -2305,6 +2430,10 @@ const stopwatchListEl = document.getElementById("stopwatch-list");
 const stopwatchAddBtn = document.getElementById("stopwatch-add");
 const stopwatchRemoveBtn = document.getElementById("stopwatch-remove");
 const bridgeStopwatchRoot = document.getElementById("bridge-stopwatch");
+const bridgeStopwatchBody = document.getElementById("bridge-stopwatch-body");
+const bridgeStopwatchVisibleCheckbox = document.getElementById(
+  "bridge-stopwatch-visible",
+);
 const bridgeStopwatchPicker = document.getElementById("bridge-stopwatch-picker");
 const stopwatchAdjustMinutes = document.getElementById("stopwatch-adjust-minutes");
 const stopwatchAdjustSeconds = document.getElementById("stopwatch-adjust-seconds");
@@ -2315,11 +2444,17 @@ const openThresholdInput = document.getElementById("open-threshold-input");
 const openThresholdUpdateBtn = document.getElementById("open-threshold-update");
 const thresholdHistoryEl = document.getElementById("threshold-history");
 const categoryEditorEl = document.getElementById("category-editor");
+const categoryAddForm = document.getElementById("category-add-form");
+const categoryAddInput = document.getElementById("category-add-input");
+const categoryAddError = document.getElementById("category-add-error");
+const categoryDeleteSelect = document.getElementById("category-delete-select");
+const categoryDeleteBtn = document.getElementById("category-delete-btn");
 
 const MIN_STOPWATCHES = 1;
 const MAX_STOPWATCHES = 4;
+const MAX_STOPWATCH_NAME_LENGTH = 40;
 
-/** @type {{ id: number, elapsedMs: number, running: boolean, startedAt: number|null, intervalId: number|null, root: HTMLElement }[]} */
+/** @type {{ id: number, name: string, elapsedMs: number, running: boolean, startedAt: number|null, intervalId: number|null, root: HTMLElement }[]} */
 let stopwatches = [];
 
 /** Dedicated adjust stopwatch — measure overlap, then add/subtract onto a numbered timer. */
@@ -2331,6 +2466,9 @@ let bridgeStopwatch = {
   intervalId: null,
   root: bridgeStopwatchRoot,
 };
+
+/** Whether the Adjust stopwatch UI is shown (timer can keep running while hidden). */
+let bridgeStopwatchVisible = true;
 
 /** Pending time adjust: positive = add, negative = subtract (ms). null = picker hidden. */
 let pendingAdjustDeltaMs = null;
@@ -2362,7 +2500,7 @@ function setActiveSideTab(tabId) {
   }
 }
 
-/* —— Category renaming panel —— */
+/* —— Category editor (rename / add / delete) —— */
 
 function showCategoryNameError(row, message) {
   const error = row.querySelector(".category-error");
@@ -2370,6 +2508,58 @@ function showCategoryNameError(row, message) {
   error.textContent = message || "";
   error.hidden = !message;
   row.classList.toggle("has-error", Boolean(message));
+}
+
+function showCategoryAddError(message) {
+  if (!categoryAddError) return;
+  categoryAddError.textContent = message || "";
+  categoryAddError.hidden = !message;
+  categoryAddForm?.classList.toggle("has-error", Boolean(message));
+}
+
+function syncCategoryDeleteSelect() {
+  if (!categoryDeleteSelect) return;
+
+  const previous = categoryDeleteSelect.value;
+  categoryDeleteSelect.replaceChildren();
+
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "Select category";
+  categoryDeleteSelect.append(placeholder);
+
+  for (const category of sortedCategories()) {
+    if (!canDeleteCategory(category.id).ok) continue;
+    const option = document.createElement("option");
+    option.value = category.id;
+    option.textContent = category.name;
+    categoryDeleteSelect.append(option);
+  }
+
+  if (
+    previous &&
+    [...categoryDeleteSelect.options].some((option) => option.value === previous)
+  ) {
+    categoryDeleteSelect.value = previous;
+  } else {
+    categoryDeleteSelect.value = "";
+  }
+
+  syncCategoryDeleteButton();
+}
+
+function syncCategoryDeleteButton() {
+  if (!categoryDeleteBtn) return;
+  const id = categoryDeleteSelect?.value || "";
+  const canDelete = Boolean(id) && canDeleteCategory(id).ok;
+  categoryDeleteBtn.disabled = !canDelete;
+  if (!id) {
+    categoryDeleteBtn.title = "Select a category first";
+  } else if (!canDelete) {
+    categoryDeleteBtn.title = canDeleteCategory(id).error || "Can’t delete";
+  } else {
+    categoryDeleteBtn.title = "";
+  }
 }
 
 function commitCategoryRename(id, input, row) {
@@ -2392,11 +2582,50 @@ function commitCategoryRename(id, input, row) {
   showCategoryNameError(row, "");
   if (!renameCategory(id, nextName)) return;
 
-  syncCategoryOptions();
-  buildTransferMenus();
-  renderCategoryEditor();
-  renderRows();
-  updateComposerMode();
+  refreshCategoryUi();
+}
+
+function onCategoryDeleteClick() {
+  const id = categoryDeleteSelect?.value || "";
+  if (!id) return;
+
+  const check = canDeleteCategory(id);
+  if (!check.ok) {
+    window.alert(check.error);
+    return;
+  }
+
+  const category = categoryById(id);
+  const label = category?.name || "this category";
+  if (!window.confirm(`Delete “${label}”? Past log entries keep their names.`)) {
+    return;
+  }
+
+  const result = deleteCategory(id);
+  if (!result.ok) {
+    window.alert(result.error);
+    return;
+  }
+
+  if (categoryDeleteSelect) categoryDeleteSelect.value = "";
+  refreshCategoryUi();
+}
+
+function onCategoryAddSubmit(event) {
+  event.preventDefault();
+  if (!categoryAddInput) return;
+
+  const result = addCategory(categoryAddInput.value);
+  if (!result.ok) {
+    showCategoryAddError(result.error);
+    categoryAddInput.focus();
+    return;
+  }
+
+  categoryAddInput.value = "";
+  showCategoryAddError("");
+  refreshCategoryUi();
+  categoryAddInput.focus();
 }
 
 function renderCategoryEditor() {
@@ -2406,6 +2635,7 @@ function renderCategoryEditor() {
   for (const category of sortedCategories()) {
     const row = document.createElement("div");
     row.className = "category-editor-row";
+    row.dataset.categoryId = category.id;
 
     const input = document.createElement("input");
     input.type = "text";
@@ -2440,6 +2670,21 @@ function renderCategoryEditor() {
     row.append(input, error);
     categoryEditorEl.append(row);
   }
+
+  syncCategoryDeleteSelect();
+}
+
+if (categoryAddForm) {
+  categoryAddForm.addEventListener("submit", onCategoryAddSubmit);
+}
+if (categoryAddInput) {
+  categoryAddInput.addEventListener("input", () => showCategoryAddError(""));
+}
+if (categoryDeleteSelect) {
+  categoryDeleteSelect.addEventListener("change", syncCategoryDeleteButton);
+}
+if (categoryDeleteBtn) {
+  categoryDeleteBtn.addEventListener("click", onCategoryDeleteClick);
 }
 
 function syncNextBookUrlInput() {
@@ -2532,6 +2777,29 @@ function createStopwatchElement(id) {
   root.className = "stopwatch";
   root.dataset.stopwatch = String(id);
   root.innerHTML = `
+    <div class="stopwatch-name-row">
+      <span class="stopwatch-index" data-stopwatch-index>#${id + 1}</span>
+      <label class="sr-only" for="sw-${id}-name">Stopwatch name</label>
+      <input
+        id="sw-${id}-name"
+        class="composer-input stopwatch-name-input"
+        type="text"
+        maxlength="${MAX_STOPWATCH_NAME_LENGTH}"
+        placeholder="Name"
+        autocomplete="off"
+        spellcheck="false"
+        data-stopwatch-name
+      />
+      <button
+        type="button"
+        class="stopwatch-name-clear"
+        data-action="clear-name"
+        aria-label="Clear name"
+        hidden
+      >
+        ×
+      </button>
+    </div>
     <div class="stopwatch-display" aria-live="polite">
       <span class="stopwatch-hours">00</span>
       <span class="stopwatch-sep" aria-hidden="true">:</span>
@@ -2596,14 +2864,105 @@ function reindexStopwatches() {
     sw.id = index;
     if (!sw.root) return;
     sw.root.dataset.stopwatch = String(index);
+    const indexEl = sw.root.querySelector("[data-stopwatch-index]");
+    const nameInput = sw.root.querySelector("[data-stopwatch-name]");
+    const nameLabel = sw.root.querySelector(`label[for^="sw-"][for$="-name"]`);
     const from = sw.root.querySelector("[data-page-from]");
     const to = sw.root.querySelector("[data-page-to]");
     const fromLabel = sw.root.querySelector(`label[for^="sw-"][for$="-page-from"]`);
     const toLabel = sw.root.querySelector(`label[for^="sw-"][for$="-page-to"]`);
+    if (indexEl) indexEl.textContent = `#${index + 1}`;
+    if (nameInput) nameInput.id = `sw-${index}-name`;
+    if (nameLabel) nameLabel.setAttribute("for", `sw-${index}-name`);
     if (from) from.id = `sw-${index}-page-from`;
     if (to) to.id = `sw-${index}-page-to`;
     if (fromLabel) fromLabel.setAttribute("for", `sw-${index}-page-from`);
     if (toLabel) toLabel.setAttribute("for", `sw-${index}-page-to`);
+  });
+}
+
+function normalizeStopwatchName(raw) {
+  return String(raw ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, MAX_STOPWATCH_NAME_LENGTH);
+}
+
+function stopwatchDisplayLabel(sw, index = sw?.id ?? 0) {
+  const name = normalizeStopwatchName(sw?.name);
+  if (name) return name;
+  return `#${Number(index) + 1}`;
+}
+
+function syncStopwatchNameUi(sw) {
+  if (!sw?.root) return;
+  const input = sw.root.querySelector("[data-stopwatch-name]");
+  const clearBtn = sw.root.querySelector('[data-action="clear-name"]');
+  const name = normalizeStopwatchName(sw.name);
+  if (input && input.value !== name && document.activeElement !== input) {
+    input.value = name;
+  }
+  if (clearBtn) clearBtn.hidden = name.length === 0;
+}
+
+function setStopwatchName(sw, raw, { save = true } = {}) {
+  if (!sw) return;
+  sw.name = normalizeStopwatchName(raw);
+  syncStopwatchNameUi(sw);
+  if (pendingAdjustDeltaMs != null) {
+    // Refresh picker labels if an Add/Subtract target list is open.
+    const picker =
+      pendingAdjustSource === "bridge"
+        ? bridgeStopwatchPicker
+        : stopwatchAdjustPicker;
+    if (picker && !picker.hidden) {
+      fillAdjustPicker(picker, pendingAdjustDeltaMs, pendingAdjustSource);
+    }
+  }
+  updateDocumentTitleFromStopwatches();
+  if (save) saveStopwatches();
+}
+
+function clearStopwatchName(sw) {
+  setStopwatchName(sw, "");
+  const input = sw?.root?.querySelector("[data-stopwatch-name]");
+  if (input) {
+    input.value = "";
+    input.focus();
+  }
+}
+
+function bindOneStopwatchName(sw) {
+  const input = sw.root?.querySelector("[data-stopwatch-name]");
+  if (!input) return;
+
+  input.addEventListener("input", () => {
+    // Live trim-to-max while typing; keep spaces the user is mid-typing.
+    const capped = String(input.value ?? "").slice(0, MAX_STOPWATCH_NAME_LENGTH);
+    if (input.value !== capped) input.value = capped;
+    sw.name = capped.replace(/^\s+/, "");
+    const clearBtn = sw.root.querySelector('[data-action="clear-name"]');
+    if (clearBtn) clearBtn.hidden = normalizeStopwatchName(sw.name).length === 0;
+    if (pendingAdjustDeltaMs != null) {
+      const picker =
+        pendingAdjustSource === "bridge"
+          ? bridgeStopwatchPicker
+          : stopwatchAdjustPicker;
+      if (picker && !picker.hidden) {
+        fillAdjustPicker(picker, pendingAdjustDeltaMs, pendingAdjustSource);
+      }
+    }
+    updateDocumentTitleFromStopwatches();
+    saveStopwatches();
+  });
+
+  const commit = () => setStopwatchName(sw, input.value);
+  input.addEventListener("change", commit);
+  input.addEventListener("blur", commit);
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    input.blur();
   });
 }
 
@@ -2650,6 +3009,7 @@ function createStopwatch(initial = {}) {
 
   const sw = {
     id,
+    name: normalizeStopwatchName(initial.name),
     elapsedMs: Number(initial.elapsedMs) > 0 ? Number(initial.elapsedMs) : 0,
     running: false,
     startedAt: null,
@@ -2659,6 +3019,8 @@ function createStopwatch(initial = {}) {
   stopwatches.push(sw);
   buildOneTransferMenu(sw);
   bindOneStopwatchReadingFields(sw);
+  bindOneStopwatchName(sw);
+  syncStopwatchNameUi(sw);
 
   const startedAt = Number(initial.startedAt);
   if (initial.running && Number.isFinite(startedAt) && startedAt > 0) {
@@ -2778,7 +3140,8 @@ function fillAdjustPicker(pickerEl, deltaMs, source) {
     btn.className = "stopwatch-btn";
     btn.dataset.action = "adjust-target";
     btn.dataset.stopwatchIndex = String(index);
-    btn.textContent = `#${index + 1}`;
+    btn.textContent = stopwatchDisplayLabel(sw, index);
+    btn.title = stopwatchDisplayLabel(sw, index);
     pickerEl.append(btn);
   });
   pickerEl.hidden = false;
@@ -2846,6 +3209,7 @@ function writeStopwatchesLocal(payload) {
 
 function stopwatchesPayload() {
   return stopwatches.map((sw) => ({
+    name: normalizeStopwatchName(sw.name),
     elapsedMs: sw.elapsedMs,
     running: sw.running,
     startedAt: sw.running ? sw.startedAt : null,
@@ -2873,7 +3237,13 @@ function loadStopwatchesFromLocal() {
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return null;
-    return parsed;
+    return parsed.map((entry) => ({
+      name: normalizeStopwatchName(entry?.name),
+      elapsedMs: Number(entry?.elapsedMs) || 0,
+      running: entry?.running === true,
+      startedAt:
+        entry?.startedAt == null ? null : Number(entry.startedAt),
+    }));
   } catch {
     return null;
   }
@@ -2882,13 +3252,14 @@ function loadStopwatchesFromLocal() {
 async function loadStopwatchesFromSupabase() {
   const { data, error } = await supabase
     .from("habit_tracker_stopwatches")
-    .select("id, elapsed_ms, running, started_at")
+    .select("id, name, elapsed_ms, running, started_at")
     .order("id", { ascending: true });
   if (error) throw error;
   if (!data || data.length === 0) return null;
 
   const hasState = data.some(
     (row) =>
+      normalizeStopwatchName(row.name).length > 0 ||
       Number(row.elapsed_ms) > 0 ||
       row.running === true ||
       row.started_at != null,
@@ -2897,6 +3268,7 @@ async function loadStopwatchesFromSupabase() {
 
   const maxId = Math.max(...data.map((row) => Number(row.id)), 0);
   const payload = Array.from({ length: maxId + 1 }, () => ({
+    name: "",
     elapsedMs: 0,
     running: false,
     startedAt: null,
@@ -2905,6 +3277,7 @@ async function loadStopwatchesFromSupabase() {
     const id = Number(row.id);
     if (!Number.isInteger(id) || id < 0) continue;
     payload[id] = {
+      name: normalizeStopwatchName(row.name),
       elapsedMs: Number(row.elapsed_ms) || 0,
       running: row.running === true,
       startedAt: row.started_at == null ? null : Number(row.started_at),
@@ -2914,16 +3287,26 @@ async function loadStopwatchesFromSupabase() {
 }
 
 async function loadStopwatches() {
+  const local = loadStopwatchesFromLocal();
   try {
     const remote = await loadStopwatchesFromSupabase();
     if (remote) {
-      writeStopwatchesLocal(remote);
-      return remote;
+      // Keep a local name if the remote row hasn't gotten one yet.
+      const merged = remote.map((entry, index) => {
+        const remoteName = normalizeStopwatchName(entry?.name);
+        const localName = normalizeStopwatchName(local?.[index]?.name);
+        return {
+          ...entry,
+          name: remoteName || localName,
+        };
+      });
+      writeStopwatchesLocal(merged);
+      return merged;
     }
   } catch (err) {
     console.error("Failed to load stopwatches from Supabase:", err);
   }
-  return loadStopwatchesFromLocal();
+  return local;
 }
 
 async function persistStopwatchesToSupabase(payload) {
@@ -2931,6 +3314,7 @@ async function persistStopwatchesToSupabase(payload) {
   const now = new Date().toISOString();
   const rows = payload.map((entry, id) => ({
     id,
+    name: normalizeStopwatchName(entry?.name),
     elapsed_ms: Number(entry?.elapsedMs) || 0,
     running: entry?.running === true,
     started_at:
@@ -2976,7 +3360,11 @@ function formatStopwatchTime(sw) {
 function updateDocumentTitleFromStopwatches() {
   const runningTimes = stopwatches
     .filter((sw) => sw.running)
-    .map((sw) => formatStopwatchTime(sw));
+    .map((sw) => {
+      const time = formatStopwatchTime(sw);
+      const name = normalizeStopwatchName(sw.name);
+      return name ? `${name} ${time}` : time;
+    });
   document.title = runningTimes.length
     ? `${DEFAULT_DOCUMENT_TITLE} · ${runningTimes.join(" · ")}`
     : DEFAULT_DOCUMENT_TITLE;
@@ -3034,6 +3422,7 @@ function bridgePayload() {
     elapsedMs: bridgeStopwatch.elapsedMs,
     running: bridgeStopwatch.running,
     startedAt: bridgeStopwatch.running ? bridgeStopwatch.startedAt : null,
+    visible: bridgeStopwatchVisible,
   };
 }
 
@@ -3059,10 +3448,36 @@ function loadBridgeStopwatchFromLocal() {
       running: parsed.running === true,
       startedAt:
         parsed.startedAt == null ? null : Number(parsed.startedAt),
+      // Missing key = older saves; default to shown.
+      visible: parsed.visible !== false,
     };
   } catch {
     return null;
   }
+}
+
+function syncBridgeStopwatchVisibility() {
+  if (bridgeStopwatchBody) {
+    bridgeStopwatchBody.hidden = !bridgeStopwatchVisible;
+  }
+  if (bridgeStopwatchVisibleCheckbox) {
+    bridgeStopwatchVisibleCheckbox.checked = bridgeStopwatchVisible;
+  }
+  if (bridgeStopwatchRoot) {
+    bridgeStopwatchRoot.classList.toggle(
+      "is-collapsed",
+      !bridgeStopwatchVisible,
+    );
+  }
+}
+
+function setBridgeStopwatchVisible(visible) {
+  bridgeStopwatchVisible = visible === true;
+  if (!bridgeStopwatchVisible && pendingAdjustSource === "bridge") {
+    hideStopwatchAdjustPicker();
+  }
+  syncBridgeStopwatchVisibility();
+  saveBridgeStopwatch();
 }
 
 function renderBridgeStopwatch() {
@@ -3124,7 +3539,9 @@ function restoreBridgeStopwatch() {
     bridgeStopwatch.elapsedMs = saved.elapsedMs;
     bridgeStopwatch.running = saved.running;
     bridgeStopwatch.startedAt = saved.startedAt;
+    bridgeStopwatchVisible = saved.visible;
   }
+  syncBridgeStopwatchVisibility();
   if (bridgeStopwatch.running && bridgeStopwatch.startedAt != null) {
     tickBridgeStopwatch();
   }
@@ -3259,11 +3676,8 @@ function completeReadingTransfer(sw) {
   categorySelect.value = READING_CATEGORY_ID;
   updateComposerMode();
 
-  if (!commitDuration(READING_CATEGORY_ID, seconds)) return;
-
-  hideStopwatchReadingFields();
-  resetStopwatch(sw);
   closeTransferMenus();
+  openTransferNoteDialog(sw, READING_CATEGORY_ID, seconds);
 }
 
 function toggleTransferMenu(sw) {
@@ -3286,6 +3700,128 @@ function bindStopwatchReadingFields() {
 function buildTransferMenus() {
   for (const sw of stopwatches) {
     buildOneTransferMenu(sw);
+  }
+}
+
+function openTransferNoteDialog(sw, categoryId, seconds) {
+  const category = categoryById(categoryId);
+  if (!category || !Number.isFinite(seconds) || seconds < 1) return;
+
+  pendingTransfer = {
+    stopwatchId: sw.id,
+    categoryId,
+    seconds,
+  };
+
+  closeTransferMenus();
+  if (categoryId === READING_CATEGORY_ID) {
+    hideStopwatchReadingFields();
+  }
+
+  transferNoteInput.value = "";
+  transferNoteSummary.textContent = `${formatLoggedDuration(seconds)} → ${category.name}`;
+  hideTransferNoteWarning();
+
+  if (typeof transferNoteDialog.showModal === "function") {
+    transferNoteDialog.showModal();
+  } else {
+    transferNoteDialog.setAttribute("open", "");
+  }
+
+  queueMicrotask(() => {
+    transferNoteInput.focus();
+  });
+}
+
+function closeTransferNoteDialog() {
+  if (typeof transferNoteDialog.close === "function") {
+    if (transferNoteDialog.open) transferNoteDialog.close();
+  } else {
+    transferNoteDialog.removeAttribute("open");
+  }
+  hideTransferNoteWarning();
+}
+
+function showTransferNoteWarning() {
+  transferNoteWarning.hidden = false;
+}
+
+function hideTransferNoteWarning() {
+  transferNoteWarning.hidden = true;
+}
+
+function isTransferNoteWarningVisible() {
+  return !transferNoteWarning.hidden;
+}
+
+/** Finish a pending transfer, with or without a note. */
+function finishPendingTransfer(comment = "") {
+  if (!pendingTransfer) return;
+
+  const { stopwatchId, categoryId, seconds } = pendingTransfer;
+  pendingTransfer = null;
+  closeTransferNoteDialog();
+
+  commitDuration(categoryId, seconds, comment);
+
+  const sw = stopwatches.find((item) => item.id === stopwatchId);
+  if (sw) {
+    resetStopwatch(sw);
+  }
+  closeTransferMenus();
+}
+
+/** First Cancel/Esc shows a warning; second confirms the abort. */
+function requestTransferAbort() {
+  if (!pendingTransfer) return;
+  if (!isTransferNoteWarningVisible()) {
+    showTransferNoteWarning();
+    return;
+  }
+  pendingTransfer = null;
+  closeTransferNoteDialog();
+  closeTransferMenus();
+}
+
+function onTransferNoteSubmit(event) {
+  event.preventDefault();
+  finishPendingTransfer(transferNoteInput.value);
+}
+
+function onTransferNoteSkip() {
+  finishPendingTransfer("");
+}
+
+function onTransferNoteCancelClick() {
+  requestTransferAbort();
+}
+
+function onTransferNoteDialogCancel(event) {
+  // Escape: warn first, abort on second press. Keep dialog open until confirmed.
+  event.preventDefault();
+  requestTransferAbort();
+}
+
+function onTransferNoteDialogClose() {
+  // Backdrop close: bank time without a note.
+  if (pendingTransfer) {
+    finishPendingTransfer("");
+  }
+}
+
+function onTransferNoteInputBlur() {
+  queueMicrotask(() => {
+    if (!pendingTransfer) return;
+    if (!transferNoteDialog.open) return;
+    if (transferNoteDialog.contains(document.activeElement)) return;
+    finishPendingTransfer("");
+  });
+}
+
+function onTransferNoteInputKeydown(event) {
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    finishPendingTransfer(transferNoteInput.value);
   }
 }
 
@@ -3315,13 +3851,8 @@ function transferStopwatch(sw, categoryId) {
     return;
   }
 
-  if (!commitDuration(categoryId, seconds)) {
-    closeTransferMenus();
-    return;
-  }
-
-  resetStopwatch(sw);
   closeTransferMenus();
+  openTransferNoteDialog(sw, categoryId, seconds);
 }
 
 function onStopwatchPageFromInput(event) {
@@ -3362,6 +3893,12 @@ if (nextBookUrlInput) {
   nextBookUrlInput.addEventListener("change", saveNextBookUrlFromInput);
   nextBookUrlInput.addEventListener("input", () => {
     nextBookUrlInput.setCustomValidity("");
+  });
+}
+
+if (bridgeStopwatchVisibleCheckbox) {
+  bridgeStopwatchVisibleCheckbox.addEventListener("change", () => {
+    setBridgeStopwatchVisible(bridgeStopwatchVisibleCheckbox.checked);
   });
 }
 
@@ -3452,6 +3989,9 @@ if (timersPanel) {
       else startStopwatch(sw);
     } else if (action === "reset") {
       resetStopwatch(sw);
+    } else if (action === "clear-name") {
+      event.stopPropagation();
+      clearStopwatchName(sw);
     } else if (action === "transfer") {
       event.stopPropagation();
       toggleTransferMenu(sw);

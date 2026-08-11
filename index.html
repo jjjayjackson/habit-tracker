@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Daily Log</title>
-    <link rel="stylesheet" href="styles.css?v=collapse-date-only" />
+    <link rel="stylesheet" href="styles.css?v=transfer-note-3" />
   </head>
   <body>
     <main class="app">
@@ -101,6 +101,35 @@
           </div>
         </form>
       </dialog>
+
+      <dialog id="transfer-note-dialog" class="book-dialog transfer-note-dialog">
+        <form id="transfer-note-form" class="book-dialog-form">
+          <h2 class="book-dialog-title">Transfer</h2>
+          <p id="transfer-note-summary" class="book-dialog-hint"></p>
+          <label class="sr-only" for="transfer-note-input">What did you work on?</label>
+          <textarea
+            id="transfer-note-input"
+            class="composer-input transfer-note-input"
+            rows="3"
+            placeholder="What did you work on?"
+            autocomplete="off"
+          ></textarea>
+          <div class="book-dialog-actions">
+            <button type="button" class="reading-action-btn" id="transfer-note-cancel">
+              Cancel
+            </button>
+            <button type="button" class="reading-action-btn" id="transfer-note-skip">
+              Skip
+            </button>
+            <button type="submit" class="reading-action-btn reading-action-btn-primary" id="transfer-note-submit">
+              Save note
+            </button>
+          </div>
+          <p id="transfer-note-warning" class="transfer-note-warning" hidden>
+            Cancel aborts the transfer — time will not be logged. Press Cancel or Esc again to confirm.
+          </p>
+        </form>
+      </dialog>
     </main>
 
     <aside
@@ -133,37 +162,50 @@
             data-bridge-stopwatch
             aria-label="Adjustment stopwatch"
           >
-            <p class="stopwatch-bridge-label">Adjust</p>
-            <div class="stopwatch-display" aria-live="polite">
-              <span class="stopwatch-hours">00</span>
-              <span class="stopwatch-sep" aria-hidden="true">:</span>
-              <span class="stopwatch-minutes">00</span>
-              <span class="stopwatch-sep" aria-hidden="true">:</span>
-              <span class="stopwatch-seconds">00</span>
+            <label class="stopwatch-bridge-heading" for="bridge-stopwatch-visible">
+              <input
+                type="checkbox"
+                id="bridge-stopwatch-visible"
+                class="stopwatch-bridge-check"
+                checked
+                aria-controls="bridge-stopwatch-body"
+                aria-label="Show adjustment stopwatch"
+              />
+              <span class="stopwatch-bridge-check-bubble" aria-hidden="true"></span>
+              <span class="stopwatch-bridge-label">Adjust</span>
+            </label>
+            <div id="bridge-stopwatch-body" class="stopwatch-bridge-body">
+              <div class="stopwatch-display" aria-live="polite">
+                <span class="stopwatch-hours">00</span>
+                <span class="stopwatch-sep" aria-hidden="true">:</span>
+                <span class="stopwatch-minutes">00</span>
+                <span class="stopwatch-sep" aria-hidden="true">:</span>
+                <span class="stopwatch-seconds">00</span>
+              </div>
+              <div class="stopwatch-actions">
+                <button type="button" class="stopwatch-btn" data-action="bridge-toggle">
+                  Start
+                </button>
+                <button type="button" class="stopwatch-btn" data-action="bridge-reset">
+                  Reset
+                </button>
+              </div>
+              <div class="stopwatch-actions">
+                <button type="button" class="stopwatch-btn" data-action="bridge-add">
+                  Add to…
+                </button>
+                <button type="button" class="stopwatch-btn" data-action="bridge-subtract">
+                  Subtract from…
+                </button>
+              </div>
+              <div
+                id="bridge-stopwatch-picker"
+                class="stopwatch-adjust-picker"
+                role="group"
+                aria-label="Choose stopwatch to adjust"
+                hidden
+              ></div>
             </div>
-            <div class="stopwatch-actions">
-              <button type="button" class="stopwatch-btn" data-action="bridge-toggle">
-                Start
-              </button>
-              <button type="button" class="stopwatch-btn" data-action="bridge-reset">
-                Reset
-              </button>
-            </div>
-            <div class="stopwatch-actions">
-              <button type="button" class="stopwatch-btn" data-action="bridge-add">
-                Add to…
-              </button>
-              <button type="button" class="stopwatch-btn" data-action="bridge-subtract">
-                Subtract from…
-              </button>
-            </div>
-            <div
-              id="bridge-stopwatch-picker"
-              class="stopwatch-adjust-picker"
-              role="group"
-              aria-label="Choose stopwatch to adjust"
-              hidden
-            ></div>
           </div>
 
           <div class="stopwatch-adjust" aria-label="Adjust stopwatch time">
@@ -250,9 +292,37 @@
           hidden
         >
           <p class="category-editor-hint">
-            Rename a category. Logged entries update to match.
+            Pick a category below to delete. Reading can’t be deleted. Past logs keep their names.
           </p>
           <div id="category-editor" class="category-editor"></div>
+          <form id="category-add-form" class="category-add-form" autocomplete="off">
+            <label class="sr-only" for="category-add-input">New category name</label>
+            <input
+              id="category-add-input"
+              class="composer-input category-name-input"
+              type="text"
+              maxlength="40"
+              placeholder="New category"
+              spellcheck="false"
+            />
+            <button type="submit" class="stopwatch-btn category-add-btn">Add</button>
+            <label class="sr-only" for="category-delete-select">Category to delete</label>
+            <select
+              id="category-delete-select"
+              class="composer-input category-delete-select"
+            >
+              <option value="">Select category</option>
+            </select>
+            <button
+              type="button"
+              id="category-delete-btn"
+              class="stopwatch-btn category-delete-action"
+              disabled
+            >
+              Delete
+            </button>
+            <p id="category-add-error" class="category-error" hidden></p>
+          </form>
         </div>
       </div>
 
@@ -266,7 +336,7 @@
           aria-selected="true"
           data-tab="timers"
         >
-          <span class="side-tab-label">Timers</span>
+          <span class="side-tab-label">Stopwatch</span>
         </button>
         <button
           type="button"
@@ -297,6 +367,6 @@
 
     <script src="vendor/supabase.js"></script>
     <script src="supabase-config.js"></script>
-    <script src="script.js?v=hover-subminute-only"></script>
+    <script src="script.js?v=transfer-note-3"></script>
   </body>
 </html>

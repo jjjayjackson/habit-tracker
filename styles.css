@@ -653,6 +653,35 @@ body {
   gap: 0.45rem;
 }
 
+.transfer-note-input {
+  width: 100%;
+  min-height: 4.5rem;
+  padding: 0.65rem 0.75rem;
+  background: #111;
+  border: 1px solid var(--composer-border);
+  border-radius: 0.75rem;
+  color: var(--fg);
+  font: inherit;
+  line-height: 1.35;
+  resize: vertical;
+}
+
+.transfer-note-input:focus {
+  outline: none;
+  border-color: #555;
+}
+
+.transfer-note-warning {
+  margin: 0;
+  color: #d4a574;
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.transfer-note-warning[hidden] {
+  display: none;
+}
+
 /* —— Permanent right-side tool rail —— */
 .side-rail {
   position: fixed;
@@ -688,15 +717,18 @@ body {
 
 #panel-timers {
   justify-content: flex-start;
+  /* Let the whole stopwatch tab scroll when multiple timers + adjust tools exceed the viewport. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .stopwatch-list {
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 1.75rem;
-  flex: 1;
-  min-height: 0;
+  /* Size to content so the panel (not a clipped flex child) becomes the scroll container. */
+  flex: none;
   width: 100%;
 }
 
@@ -717,12 +749,76 @@ body {
   gap: 0.5rem;
 }
 
+.stopwatch-bridge-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  cursor: pointer;
+  user-select: none;
+  width: fit-content;
+  position: relative;
+}
+
+.stopwatch-bridge-check {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0.85rem;
+  height: 0.85rem;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 1;
+}
+
+.stopwatch-bridge-check-bubble {
+  flex: none;
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 50%;
+  border: 1px solid var(--muted);
+  background: transparent;
+  box-shadow: inset 0 0 0 0 var(--fg);
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease,
+    box-shadow 0.12s ease;
+}
+
+.stopwatch-bridge-heading:hover .stopwatch-bridge-check-bubble {
+  border-color: var(--fg);
+}
+
+.stopwatch-bridge-check:focus-visible + .stopwatch-bridge-check-bubble {
+  outline: 2px solid var(--fg);
+  outline-offset: 2px;
+}
+
+.stopwatch-bridge-check:checked + .stopwatch-bridge-check-bubble {
+  border-color: var(--fg);
+  background: var(--fg);
+  box-shadow: inset 0 0 0 2px var(--bg);
+}
+
 .stopwatch-bridge-label {
   margin: 0;
   color: var(--muted);
   font-size: 0.68rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+.stopwatch-bridge-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.stopwatch-bridge-body[hidden] {
+  display: none !important;
 }
 
 .stopwatch-bridge .stopwatch-display {
@@ -767,6 +863,12 @@ body {
 .stopwatch-adjust-picker:not([hidden]) {
   display: flex;
   flex-wrap: wrap;
+}
+
+.stopwatch-adjust-picker .stopwatch-btn {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .side-panel-next-book {
@@ -877,7 +979,63 @@ body {
   font-size: 0.78rem;
 }
 
-.category-editor-row.has-error .category-name-input {
+.category-add-form {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.35rem;
+  width: 100%;
+  margin: 0;
+  align-items: stretch;
+}
+
+.category-add-form .category-error {
+  grid-column: 1 / -1;
+}
+
+.category-add-btn,
+.category-delete-action {
+  flex: none;
+  width: 3.4rem;
+  padding: 0.3rem 0.25rem;
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+
+.category-delete-select {
+  width: 100%;
+  min-width: 0;
+  height: auto;
+  min-height: 2rem;
+  padding: 0.35rem 1.6rem 0.35rem 0.5rem;
+  font-size: 0.72rem;
+  border-radius: 0.55rem;
+  background: #111;
+  border: 1px solid var(--composer-border);
+  cursor: pointer;
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 12px) 50%, calc(100% - 8px) 50%;
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+}
+
+.category-delete-select:hover {
+  background-color: var(--composer-hover);
+}
+
+.category-delete-select:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.category-delete-action {
+  padding: 0.22rem 0.25rem;
+  font-size: 0.62rem;
+}
+
+.category-editor-row.has-error .category-name-input,
+.category-add-form.has-error .category-name-input {
   border-color: #f87171;
 }
 
@@ -942,6 +1100,56 @@ body {
   flex-direction: column;
   align-items: center;
   gap: 0.65rem;
+}
+
+.stopwatch-name-row {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  width: 100%;
+}
+
+.stopwatch-index {
+  flex: none;
+  min-width: 1.35rem;
+  color: var(--muted);
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.stopwatch-name-input {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  padding: 0.3rem 0.4rem;
+  font-size: 0.72rem;
+}
+
+.stopwatch-name-clear {
+  flex: none;
+  width: 1.5rem;
+  height: 1.5rem;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--composer-border);
+  border-radius: 0.35rem;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.stopwatch-name-clear:hover {
+  color: var(--fg);
+  background: var(--composer-hover);
+}
+
+.stopwatch-name-clear:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 
 .stopwatch-display {
