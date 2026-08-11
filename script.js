@@ -18,7 +18,6 @@ const SOL_EPOCH = { month: 4, day: 22 }; // May 22 (0-indexed month)
 const STORAGE_KEY = "habit-tracker-mvp:rows";
 const BOOKS_STORAGE_KEY = "habit-tracker-mvp:reading-books";
 const STOPWATCHES_STORAGE_KEY = "habit-tracker-mvp:stopwatches";
-const BRIDGE_STOPWATCH_STORAGE_KEY = "habit-tracker-mvp:bridge-stopwatch";
 const COLLAPSED_DAYS_STORAGE_KEY = "habit-tracker-mvp:collapsed-days";
 const CATEGORIES_STORAGE_KEY = "habit-tracker-mvp:categories";
 const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -2429,12 +2428,6 @@ const timersPanel = document.getElementById("panel-timers");
 const stopwatchListEl = document.getElementById("stopwatch-list");
 const stopwatchAddBtn = document.getElementById("stopwatch-add");
 const stopwatchRemoveBtn = document.getElementById("stopwatch-remove");
-const bridgeStopwatchRoot = document.getElementById("bridge-stopwatch");
-const bridgeStopwatchBody = document.getElementById("bridge-stopwatch-body");
-const bridgeStopwatchVisibleCheckbox = document.getElementById(
-  "bridge-stopwatch-visible",
-);
-const bridgeStopwatchPicker = document.getElementById("bridge-stopwatch-picker");
 const stopwatchAdjustMinutes = document.getElementById("stopwatch-adjust-minutes");
 const stopwatchAdjustSeconds = document.getElementById("stopwatch-adjust-seconds");
 const stopwatchAdjustPicker = document.getElementById("stopwatch-adjust-picker");
@@ -2457,25 +2450,17 @@ const MAX_STOPWATCH_NAME_LENGTH = 40;
 /** @type {{ id: number, name: string, elapsedMs: number, running: boolean, startedAt: number|null, intervalId: number|null, root: HTMLElement }[]} */
 let stopwatches = [];
 
-/** Dedicated adjust stopwatch — measure overlap, then add/subtract onto a numbered timer. */
-/** @type {{ elapsedMs: number, running: boolean, startedAt: number|null, intervalId: number|null, root: HTMLElement|null }} */
-let bridgeStopwatch = {
-  elapsedMs: 0,
-  running: false,
-  startedAt: null,
-  intervalId: null,
-  root: bridgeStopwatchRoot,
-};
-
-/** Whether the Adjust stopwatch UI is shown (timer can keep running while hidden). */
-let bridgeStopwatchVisible = true;
-
 /** Pending time adjust: positive = add, negative = subtract (ms). null = picker hidden. */
 let pendingAdjustDeltaMs = null;
-/** Which picker owns the pending adjust: "manual" | "bridge" | null */
-let pendingAdjustSource = null;
 
 const DEFAULT_DOCUMENT_TITLE = document.title || "Daily Log";
+
+// Drop stale Adjust/bridge stopwatch state from older builds.
+try {
+  localStorage.removeItem("habit-tracker-mvp:bridge-stopwatch");
+} catch {
+  /* ignore */
+}
 
 /** Stopwatch waiting on a new book before showing Reading page fields. */
 let pendingReadingTransferId = null;
@@ -2909,15 +2894,9 @@ function setStopwatchName(sw, raw, { save = true } = {}) {
   if (!sw) return;
   sw.name = normalizeStopwatchName(raw);
   syncStopwatchNameUi(sw);
-  if (pendingAdjustDeltaMs != null) {
+  if (pendingAdjustDeltaMs != null && stopwatchAdjustPicker && !stopwatchAdjustPicker.hidden) {
     // Refresh picker labels if an Add/Subtract target list is open.
-    const picker =
-      pendingAdjustSource === "bridge"
-        ? bridgeStopwatchPicker
-        : stopwatchAdjustPicker;
-    if (picker && !picker.hidden) {
-      fillAdjustPicker(picker, pendingAdjustDeltaMs, pendingAdjustSource);
-    }
+    fillAdjustPicker(pendingAdjustDeltaMs);
   }
   updateDocumentTitleFromStopwatches();
   if (save) saveStopwatches();
@@ -2943,14 +2922,8 @@ function bindOneStopwatchName(sw) {
     sw.name = capped.replace(/^\s+/, "");
     const clearBtn = sw.root.querySelector('[data-action="clear-name"]');
     if (clearBtn) clearBtn.hidden = normalizeStopwatchName(sw.name).length === 0;
-    if (pendingAdjustDeltaMs != null) {
-      const picker =
-        pendingAdjustSource === "bridge"
-          ? bridgeStopwatchPicker
-          : stopwatchAdjustPicker;
-      if (picker && !picker.hidden) {
-        fillAdjustPicker(picker, pendingAdjustDeltaMs, pendingAdjustSource);
-      }
+    if (pendingAdjustDeltaMs != null && stopwatchAdjustPicker && !stopwatchAdjustPicker.hidden) {
+      fillAdjustPicker(pendingAdjustDeltaMs);
     }
     updateDocumentTitleFromStopwatches();
     saveStopwatches();
@@ -3118,22 +3091,16 @@ function parseAdjustDurationMs() {
 
 function hideStopwatchAdjustPicker() {
   pendingAdjustDeltaMs = null;
-  pendingAdjustSource = null;
   if (stopwatchAdjustPicker) {
     stopwatchAdjustPicker.hidden = true;
     stopwatchAdjustPicker.replaceChildren();
   }
-  if (bridgeStopwatchPicker) {
-    bridgeStopwatchPicker.hidden = true;
-    bridgeStopwatchPicker.replaceChildren();
-  }
 }
 
-function fillAdjustPicker(pickerEl, deltaMs, source) {
+function fillAdjustPicker(deltaMs) {
   pendingAdjustDeltaMs = deltaMs;
-  pendingAdjustSource = source;
-  if (!pickerEl) return;
-  pickerEl.replaceChildren();
+  if (!stopwatchAdjustPicker) return;
+  stopwatchAdjustPicker.replaceChildren();
   stopwatches.forEach((sw, index) => {
     const btn = document.createElement("button");
     btn.type = "button";
@@ -3142,38 +3109,15 @@ function fillAdjustPicker(pickerEl, deltaMs, source) {
     btn.dataset.stopwatchIndex = String(index);
     btn.textContent = stopwatchDisplayLabel(sw, index);
     btn.title = stopwatchDisplayLabel(sw, index);
-    pickerEl.append(btn);
+    stopwatchAdjustPicker.append(btn);
   });
-  pickerEl.hidden = false;
-}
-
-function showStopwatchAdjustPicker(deltaMs) {
-  if (bridgeStopwatchPicker) {
-    bridgeStopwatchPicker.hidden = true;
-    bridgeStopwatchPicker.replaceChildren();
-  }
-  fillAdjustPicker(stopwatchAdjustPicker, deltaMs, "manual");
+  stopwatchAdjustPicker.hidden = false;
 }
 
 function beginStopwatchAdjust(sign) {
   const ms = parseAdjustDurationMs();
   if (ms == null) return;
-  showStopwatchAdjustPicker(sign * ms);
-}
-
-function beginBridgeAdjust(sign) {
-  // Fold running time so the delta matches what the display shows.
-  if (bridgeStopwatch.running && bridgeStopwatch.startedAt != null) {
-    bridgeStopwatch.elapsedMs = getStopwatchElapsed(bridgeStopwatch);
-    bridgeStopwatch.startedAt = Date.now();
-  }
-  const ms = Math.floor(getStopwatchElapsed(bridgeStopwatch));
-  if (ms <= 0) return;
-  if (stopwatchAdjustPicker) {
-    stopwatchAdjustPicker.hidden = true;
-    stopwatchAdjustPicker.replaceChildren();
-  }
-  fillAdjustPicker(bridgeStopwatchPicker, sign * ms, "bridge");
+  fillAdjustPicker(sign * ms);
 }
 
 function applyStopwatchAdjust(index) {
@@ -3415,137 +3359,6 @@ function resetStopwatch(sw) {
   sw.elapsedMs = 0;
   renderStopwatch(sw);
   saveStopwatches();
-}
-
-function bridgePayload() {
-  return {
-    elapsedMs: bridgeStopwatch.elapsedMs,
-    running: bridgeStopwatch.running,
-    startedAt: bridgeStopwatch.running ? bridgeStopwatch.startedAt : null,
-    visible: bridgeStopwatchVisible,
-  };
-}
-
-function saveBridgeStopwatch() {
-  try {
-    localStorage.setItem(
-      BRIDGE_STOPWATCH_STORAGE_KEY,
-      JSON.stringify(bridgePayload()),
-    );
-  } catch {
-    /* ignore quota / private mode */
-  }
-}
-
-function loadBridgeStopwatchFromLocal() {
-  try {
-    const raw = localStorage.getItem(BRIDGE_STOPWATCH_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return null;
-    return {
-      elapsedMs: Number(parsed.elapsedMs) || 0,
-      running: parsed.running === true,
-      startedAt:
-        parsed.startedAt == null ? null : Number(parsed.startedAt),
-      // Missing key = older saves; default to shown.
-      visible: parsed.visible !== false,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function syncBridgeStopwatchVisibility() {
-  if (bridgeStopwatchBody) {
-    bridgeStopwatchBody.hidden = !bridgeStopwatchVisible;
-  }
-  if (bridgeStopwatchVisibleCheckbox) {
-    bridgeStopwatchVisibleCheckbox.checked = bridgeStopwatchVisible;
-  }
-  if (bridgeStopwatchRoot) {
-    bridgeStopwatchRoot.classList.toggle(
-      "is-collapsed",
-      !bridgeStopwatchVisible,
-    );
-  }
-}
-
-function setBridgeStopwatchVisible(visible) {
-  bridgeStopwatchVisible = visible === true;
-  if (!bridgeStopwatchVisible && pendingAdjustSource === "bridge") {
-    hideStopwatchAdjustPicker();
-  }
-  syncBridgeStopwatchVisibility();
-  saveBridgeStopwatch();
-}
-
-function renderBridgeStopwatch() {
-  const sw = bridgeStopwatch;
-  if (!sw?.root) return;
-  const time = formatStopwatchTime(sw);
-  const [hours, minutes, seconds] = time.split(":");
-  const hoursEl = sw.root.querySelector(".stopwatch-hours");
-  const minutesEl = sw.root.querySelector(".stopwatch-minutes");
-  const secondsEl = sw.root.querySelector(".stopwatch-seconds");
-  const toggleBtn = sw.root.querySelector('[data-action="bridge-toggle"]');
-  if (hoursEl) hoursEl.textContent = hours;
-  if (minutesEl) minutesEl.textContent = minutes;
-  if (secondsEl) secondsEl.textContent = seconds;
-  if (toggleBtn) {
-    toggleBtn.textContent = sw.running ? "Stop" : "Start";
-    toggleBtn.classList.toggle("is-running", sw.running);
-  }
-}
-
-function tickBridgeStopwatch() {
-  if (bridgeStopwatch.intervalId != null) clearInterval(bridgeStopwatch.intervalId);
-  bridgeStopwatch.intervalId = setInterval(renderBridgeStopwatch, 250);
-}
-
-function startBridgeStopwatch() {
-  if (bridgeStopwatch.running) return;
-  bridgeStopwatch.running = true;
-  bridgeStopwatch.startedAt = Date.now();
-  tickBridgeStopwatch();
-  renderBridgeStopwatch();
-  saveBridgeStopwatch();
-}
-
-function stopBridgeStopwatch() {
-  if (!bridgeStopwatch.running) return;
-  bridgeStopwatch.elapsedMs = getStopwatchElapsed(bridgeStopwatch);
-  bridgeStopwatch.running = false;
-  bridgeStopwatch.startedAt = null;
-  if (bridgeStopwatch.intervalId != null) {
-    clearInterval(bridgeStopwatch.intervalId);
-    bridgeStopwatch.intervalId = null;
-  }
-  renderBridgeStopwatch();
-  saveBridgeStopwatch();
-}
-
-function resetBridgeStopwatch() {
-  stopBridgeStopwatch();
-  bridgeStopwatch.elapsedMs = 0;
-  hideStopwatchAdjustPicker();
-  renderBridgeStopwatch();
-  saveBridgeStopwatch();
-}
-
-function restoreBridgeStopwatch() {
-  const saved = loadBridgeStopwatchFromLocal();
-  if (saved) {
-    bridgeStopwatch.elapsedMs = saved.elapsedMs;
-    bridgeStopwatch.running = saved.running;
-    bridgeStopwatch.startedAt = saved.startedAt;
-    bridgeStopwatchVisible = saved.visible;
-  }
-  syncBridgeStopwatchVisibility();
-  if (bridgeStopwatch.running && bridgeStopwatch.startedAt != null) {
-    tickBridgeStopwatch();
-  }
-  renderBridgeStopwatch();
 }
 
 function closeTransferMenus(exceptRoot = null) {
@@ -3896,12 +3709,6 @@ if (nextBookUrlInput) {
   });
 }
 
-if (bridgeStopwatchVisibleCheckbox) {
-  bridgeStopwatchVisibleCheckbox.addEventListener("change", () => {
-    setBridgeStopwatchVisible(bridgeStopwatchVisibleCheckbox.checked);
-  });
-}
-
 if (nextBookPasteBtn) {
   nextBookPasteBtn.addEventListener("click", () => {
     pasteNextBookUrl();
@@ -3960,23 +3767,6 @@ if (timersPanel) {
     }
     if (action === "adjust-target") {
       applyStopwatchAdjust(Number(btn.dataset.stopwatchIndex));
-      return;
-    }
-    if (action === "bridge-toggle") {
-      if (bridgeStopwatch.running) stopBridgeStopwatch();
-      else startBridgeStopwatch();
-      return;
-    }
-    if (action === "bridge-reset") {
-      resetBridgeStopwatch();
-      return;
-    }
-    if (action === "bridge-add") {
-      beginBridgeAdjust(1);
-      return;
-    }
-    if (action === "bridge-subtract") {
-      beginBridgeAdjust(-1);
       return;
     }
 
@@ -4041,7 +3831,6 @@ if (stopwatchAdjustSeconds) {
 
 // Fresh paint before async restore — one empty stopwatch.
 ensureStopwatchCount(MIN_STOPWATCHES);
-renderBridgeStopwatch();
 syncNextBookUrlInput();
 syncOpenThresholdInput();
 renderThresholdHistory();
@@ -4185,7 +3974,6 @@ async function boot() {
   renderThresholdHistory();
   await restoreStopwatches();
   stopwatches.forEach(renderStopwatch);
-  restoreBridgeStopwatch();
   // Rebuild transfer menus after categories (and stopwatches) are ready.
   buildTransferMenus();
   durationInput.focus();

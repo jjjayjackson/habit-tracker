@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Daily Log</title>
-    <link rel="stylesheet" href="styles.css?v=transfer-note-3" />
+    <link rel="stylesheet" href="styles.css?v=stopwatch-footer-1" />
   </head>
   <body>
     <main class="app">
@@ -147,99 +147,49 @@
         >
           <div id="stopwatch-list" class="stopwatch-list"></div>
 
-          <div class="stopwatch-manage">
-            <button type="button" class="stopwatch-btn" id="stopwatch-add" data-action="add-stopwatch">
-              Add
-            </button>
-            <button type="button" class="stopwatch-btn" id="stopwatch-remove" data-action="remove-stopwatch">
-              Remove
-            </button>
-          </div>
+          <div class="stopwatch-footer">
+            <div class="stopwatch-manage">
+              <button type="button" class="stopwatch-btn" id="stopwatch-add" data-action="add-stopwatch">
+                Add
+              </button>
+              <button type="button" class="stopwatch-btn" id="stopwatch-remove" data-action="remove-stopwatch">
+                Remove
+              </button>
+            </div>
 
-          <div
-            id="bridge-stopwatch"
-            class="stopwatch stopwatch-bridge"
-            data-bridge-stopwatch
-            aria-label="Adjustment stopwatch"
-          >
-            <label class="stopwatch-bridge-heading" for="bridge-stopwatch-visible">
-              <input
-                type="checkbox"
-                id="bridge-stopwatch-visible"
-                class="stopwatch-bridge-check"
-                checked
-                aria-controls="bridge-stopwatch-body"
-                aria-label="Show adjustment stopwatch"
-              />
-              <span class="stopwatch-bridge-check-bubble" aria-hidden="true"></span>
-              <span class="stopwatch-bridge-label">Adjust</span>
-            </label>
-            <div id="bridge-stopwatch-body" class="stopwatch-bridge-body">
-              <div class="stopwatch-display" aria-live="polite">
-                <span class="stopwatch-hours">00</span>
-                <span class="stopwatch-sep" aria-hidden="true">:</span>
-                <span class="stopwatch-minutes">00</span>
-                <span class="stopwatch-sep" aria-hidden="true">:</span>
-                <span class="stopwatch-seconds">00</span>
+            <div class="stopwatch-adjust" aria-label="Adjust stopwatch time">
+              <div class="stopwatch-adjust-inputs">
+                <label class="sr-only" for="stopwatch-adjust-minutes">Minutes</label>
+                <input
+                  id="stopwatch-adjust-minutes"
+                  class="composer-input stopwatch-adjust-input"
+                  type="text"
+                  inputmode="numeric"
+                  placeholder="min"
+                  autocomplete="off"
+                />
+                <label class="sr-only" for="stopwatch-adjust-seconds">Seconds</label>
+                <input
+                  id="stopwatch-adjust-seconds"
+                  class="composer-input stopwatch-adjust-input"
+                  type="text"
+                  inputmode="numeric"
+                  placeholder="sec"
+                  autocomplete="off"
+                />
               </div>
-              <div class="stopwatch-actions">
-                <button type="button" class="stopwatch-btn" data-action="bridge-toggle">
-                  Start
-                </button>
-                <button type="button" class="stopwatch-btn" data-action="bridge-reset">
-                  Reset
-                </button>
-              </div>
-              <div class="stopwatch-actions">
-                <button type="button" class="stopwatch-btn" data-action="bridge-add">
-                  Add to…
-                </button>
-                <button type="button" class="stopwatch-btn" data-action="bridge-subtract">
-                  Subtract from…
-                </button>
+              <div class="stopwatch-adjust-actions">
+                <button type="button" class="stopwatch-btn" data-action="adjust-add">Add</button>
+                <button type="button" class="stopwatch-btn" data-action="adjust-subtract">Subtract</button>
               </div>
               <div
-                id="bridge-stopwatch-picker"
+                id="stopwatch-adjust-picker"
                 class="stopwatch-adjust-picker"
                 role="group"
-                aria-label="Choose stopwatch to adjust"
+                aria-label="Choose stopwatch"
                 hidden
               ></div>
             </div>
-          </div>
-
-          <div class="stopwatch-adjust" aria-label="Adjust stopwatch time">
-            <div class="stopwatch-adjust-inputs">
-              <label class="sr-only" for="stopwatch-adjust-minutes">Minutes</label>
-              <input
-                id="stopwatch-adjust-minutes"
-                class="composer-input stopwatch-adjust-input"
-                type="text"
-                inputmode="numeric"
-                placeholder="min"
-                autocomplete="off"
-              />
-              <label class="sr-only" for="stopwatch-adjust-seconds">Seconds</label>
-              <input
-                id="stopwatch-adjust-seconds"
-                class="composer-input stopwatch-adjust-input"
-                type="text"
-                inputmode="numeric"
-                placeholder="sec"
-                autocomplete="off"
-              />
-            </div>
-            <div class="stopwatch-adjust-actions">
-              <button type="button" class="stopwatch-btn" data-action="adjust-add">Add</button>
-              <button type="button" class="stopwatch-btn" data-action="adjust-subtract">Subtract</button>
-            </div>
-            <div
-              id="stopwatch-adjust-picker"
-              class="stopwatch-adjust-picker"
-              role="group"
-              aria-label="Choose stopwatch"
-              hidden
-            ></div>
           </div>
         </div>
 
@@ -367,6 +317,6 @@
 
     <script src="vendor/supabase.js"></script>
     <script src="supabase-config.js"></script>
-    <script src="script.js?v=transfer-note-3"></script>
+    <script src="script.js?v=manual-adjust-1"></script>
   </body>
 </html>

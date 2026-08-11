@@ -717,8 +717,8 @@ body {
 
 #panel-timers {
   justify-content: flex-start;
-  /* Let the whole stopwatch tab scroll when multiple timers + adjust tools exceed the viewport. */
-  overflow-y: auto;
+  /* Footer stays pinned; only the stopwatch list scrolls when content overflows. */
+  overflow: hidden;
   overscroll-behavior: contain;
 }
 
@@ -727,9 +727,22 @@ body {
   flex-direction: column;
   justify-content: flex-start;
   gap: 1.75rem;
-  /* Size to content so the panel (not a clipped flex child) becomes the scroll container. */
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Keep Add/Remove + time adjust stuck to the bottom of the panel. */
+.stopwatch-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
   flex: none;
   width: 100%;
+  margin-top: auto;
+  padding-top: 0.35rem;
 }
 
 .stopwatch-manage {
@@ -740,100 +753,12 @@ body {
   flex: none;
 }
 
-.stopwatch-bridge {
-  width: 100%;
-  flex: none;
-  margin-top: 0.35rem;
-  padding-top: 0.85rem;
-  border-top: 1px solid var(--composer-border);
-  gap: 0.5rem;
-}
-
-.stopwatch-bridge-heading {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  margin: 0;
-  cursor: pointer;
-  user-select: none;
-  width: fit-content;
-  position: relative;
-}
-
-.stopwatch-bridge-check {
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 0.85rem;
-  height: 0.85rem;
-  margin: 0;
-  opacity: 0;
-  cursor: pointer;
-  z-index: 1;
-}
-
-.stopwatch-bridge-check-bubble {
-  flex: none;
-  width: 0.85rem;
-  height: 0.85rem;
-  border-radius: 50%;
-  border: 1px solid var(--muted);
-  background: transparent;
-  box-shadow: inset 0 0 0 0 var(--fg);
-  transition:
-    background 0.12s ease,
-    border-color 0.12s ease,
-    box-shadow 0.12s ease;
-}
-
-.stopwatch-bridge-heading:hover .stopwatch-bridge-check-bubble {
-  border-color: var(--fg);
-}
-
-.stopwatch-bridge-check:focus-visible + .stopwatch-bridge-check-bubble {
-  outline: 2px solid var(--fg);
-  outline-offset: 2px;
-}
-
-.stopwatch-bridge-check:checked + .stopwatch-bridge-check-bubble {
-  border-color: var(--fg);
-  background: var(--fg);
-  box-shadow: inset 0 0 0 2px var(--bg);
-}
-
-.stopwatch-bridge-label {
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.68rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.stopwatch-bridge-body {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  width: 100%;
-}
-
-.stopwatch-bridge-body[hidden] {
-  display: none !important;
-}
-
-.stopwatch-bridge .stopwatch-display {
-  font-size: 0.95rem;
-  min-width: 6.5rem;
-  padding: 0.45rem 0.3rem;
-}
-
 .stopwatch-adjust {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
   width: 100%;
   flex: none;
-  margin-top: 0.15rem;
   padding-top: 0.85rem;
   border-top: 1px solid var(--composer-border);
 }
