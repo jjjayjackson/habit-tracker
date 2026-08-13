@@ -109,6 +109,21 @@ let activeDayKey = null;
 /** Pending transfer waiting on the note dialog (stopwatch or bottom bar). */
 let pendingTransfer = null;
 
+const MONTH_NAMES = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
 function formatDate(date) {
   const m = date.getMonth() + 1;
   const d = date.getDate();
@@ -182,6 +197,54 @@ function sortedDayKeys(days = state.days) {
   return Object.keys(days)
     .filter((key) => DAY_KEY_RE.test(key) && Array.isArray(days[key]) && days[key].length > 0)
     .sort();
+}
+
+/** Monday = 0 … Sunday = 6 */
+function mondayOffset(date) {
+  return (date.getDay() + 6) % 7;
+}
+
+function shiftDayKey(dayKey, days) {
+  const date = dateFromDayKey(dayKey);
+  date.setDate(date.getDate() + days);
+  return localDayKey(date);
+}
+
+function startOfWeekKey(dayKey) {
+  return shiftDayKey(dayKey, -mondayOffset(dateFromDayKey(dayKey)));
+}
+
+function weekSlotKeys(weekStartKey) {
+  return [0, 1, 2, 3, 4, 5, 6].map((i) => shiftDayKey(weekStartKey, i));
+}
+
+function dayHasEntries(dayKey, days = state.days) {
+  return Array.isArray(days[dayKey]) && days[dayKey].length > 0;
+}
+
+function weekHasCollapsedDay(weekStartKey) {
+  return weekSlotKeys(weekStartKey).some((key) => isDayCollapsed(key));
+}
+
+function groupDayKeysIntoWeeks(dayKeys) {
+  const weeks = [];
+  const seen = new Set();
+  for (const key of dayKeys) {
+    const start = startOfWeekKey(key);
+    if (seen.has(start)) continue;
+    seen.add(start);
+    weeks.push(start);
+  }
+  return weeks;
+}
+
+/** Thursday decides the month, matching ISO’s week-year rule. */
+function weekHeading(weekStartKey) {
+  const thursday = dateFromDayKey(shiftDayKey(weekStartKey, 3));
+  return {
+    month: MONTH_NAMES[thursday.getMonth()],
+    weekNum: Math.ceil(thursday.getDate() / 7),
+  };
 }
 
 function rowsFor(dayKey) {
@@ -1390,11 +1453,12 @@ function isDayCollapsed(dayKey) {
   return state.collapsedDays.has(dayKey);
 }
 
-function toggleDayCollapsed(dayKey) {
-  if (state.collapsedDays.has(dayKey)) {
-    state.collapsedDays.delete(dayKey);
-  } else {
+function setDayCollapsed(dayKey, collapsed) {
+  if (!dayHasEntries(dayKey)) return;
+  if (collapsed) {
     state.collapsedDays.add(dayKey);
+  } else {
+    state.collapsedDays.delete(dayKey);
   }
   saveCollapsedDays();
 }
@@ -1501,18 +1565,15 @@ function bindDayHeaderControls() {
       event.stopPropagation();
       const dayKey = button.dataset.day;
       if (!dayKey) return;
-      openDateEditor(dayKey);
+      setDayCollapsed(dayKey, !isDayCollapsed(dayKey));
+      renderRows();
     });
-  });
-
-  logEl.querySelectorAll(".day-collapse-btn").forEach((button) => {
-    button.addEventListener("click", (event) => {
+    button.addEventListener("contextmenu", (event) => {
       event.preventDefault();
       event.stopPropagation();
       const dayKey = button.dataset.day;
       if (!dayKey) return;
-      toggleDayCollapsed(dayKey);
-      renderRows();
+      openDateMenu(dayKey, event.clientX, event.clientY);
     });
   });
 }
@@ -1706,6 +1767,61 @@ function createMenuButton(label, { danger = false, onClick } = {}) {
   return btn;
 }
 
+function positionContextMenu(menu, clientX, clientY) {
+  const pad = 8;
+  menu.style.maxHeight = "";
+  menu.style.overflowY = "";
+
+  const width = menu.offsetWidth;
+  const height = menu.offsetHeight;
+  let left = clientX;
+  if (left + width > window.innerWidth - pad) {
+    left = window.innerWidth - width - pad;
+  }
+  left = Math.max(pad, left);
+
+  const spaceBelow = window.innerHeight - clientY - pad;
+  const spaceAbove = clientY - pad;
+  let top = clientY;
+
+  if (height <= spaceBelow) {
+    top = clientY;
+  } else if (height <= spaceAbove) {
+    top = clientY - height;
+  } else if (spaceBelow >= spaceAbove) {
+    top = clientY;
+    menu.style.maxHeight = `${Math.max(spaceBelow, 48)}px`;
+    menu.style.overflowY = "auto";
+  } else {
+    top = pad;
+    menu.style.maxHeight = `${Math.max(spaceAbove, 48)}px`;
+    menu.style.overflowY = "auto";
+  }
+
+  menu.style.left = `${left}px`;
+  menu.style.top = `${Math.max(pad, top)}px`;
+}
+
+function openDateMenu(dayKey, clientX, clientY) {
+  if (!dayHasEntries(dayKey)) return;
+  closeContextMenu();
+  hideTimestampPopup();
+
+  const menu = document.createElement("div");
+  menu.className = "context-menu";
+  menu.setAttribute("role", "menu");
+
+  menu.append(
+    createMenuButton("Edit", {
+      onClick: () => openDateEditor(dayKey),
+    }),
+  );
+
+  document.body.append(menu);
+  contextMenuEl = menu;
+  positionContextMenu(menu, clientX, clientY);
+}
+
 function openDurationMenu(dayKey, rowIndex, entryIndex, clientX, clientY, mode) {
   closeContextMenu();
   hideTimestampPopup();
@@ -1743,12 +1859,7 @@ function openDurationMenu(dayKey, rowIndex, entryIndex, clientX, clientY, mode) 
 
   document.body.append(menu);
   contextMenuEl = menu;
-
-  const { offsetWidth, offsetHeight } = menu;
-  const x = Math.min(clientX, window.innerWidth - offsetWidth - 8);
-  const y = Math.min(clientY, window.innerHeight - offsetHeight - 8);
-  menu.style.left = `${Math.max(8, x)}px`;
-  menu.style.top = `${Math.max(8, y)}px`;
+  positionContextMenu(menu, clientX, clientY);
 }
 
 function renderNoteComposer(dayKey, rowIndex, entryIndex) {
@@ -2060,23 +2171,13 @@ function renderDayTable(dayKey, rows) {
     })
     .join("");
 
-  const collapsed = isDayCollapsed(dayKey);
   const dayTotal = dayTotalSeconds(rows);
 
   return `
-    <table class="log-table${collapsed ? " is-collapsed" : ""}" data-day="${dayKey}" aria-label="Daily activity log for ${escapeHtml(dateLabel)}">
+    <table class="log-table" data-day="${dayKey}" aria-label="Daily activity log for ${escapeHtml(dateLabel)}">
       <thead>
         <tr>
-          <th scope="col" class="day-date-cell" data-day="${dayKey}">
-            <button type="button" class="day-date-btn" data-day="${dayKey}" title="Edit date">${escapeHtml(dateLabel)}</button>
-            <button
-              type="button"
-              class="day-collapse-btn"
-              data-day="${dayKey}"
-              aria-expanded="${collapsed ? "false" : "true"}"
-              aria-label="${collapsed ? "Show" : "Hide"} entries for ${escapeHtml(dateLabel)}"
-            ><span class="day-collapse-caret" aria-hidden="true">▾</span></button>
-          </th>
+          <th scope="col">${escapeHtml(dateLabel)}</th>
           <th scope="col">${escapeHtml(solLabel)}</th>
           <th scope="col">Total time</th>
         </tr>
@@ -2095,6 +2196,49 @@ function renderDayTable(dayKey, rows) {
   `;
 }
 
+function renderWeekDateCell(dayKey) {
+  if (!dayHasEntries(dayKey)) {
+    return `<div class="log-week-date-cell is-empty" aria-hidden="true"></div>`;
+  }
+
+  const dateLabel = formatDate(dateFromDayKey(dayKey));
+  const collapsed = isDayCollapsed(dayKey);
+  const stateClass = collapsed ? " is-collapsed" : " is-expanded";
+  return `
+    <div class="log-week-date-cell day-date-cell${stateClass}" data-day="${dayKey}">
+      <button type="button" class="day-date-btn" data-day="${dayKey}">${escapeHtml(dateLabel)}</button>
+    </div>
+  `;
+}
+
+function renderWeek(weekStartKey) {
+  const slots = weekSlotKeys(weekStartKey);
+  const presentKeys = slots.filter((key) => dayHasEntries(key));
+  const positioned = weekHasCollapsedDay(weekStartKey);
+  const dateCells = (positioned ? slots : presentKeys).map(renderWeekDateCell).join("");
+  const expandedKeys = presentKeys.filter((key) => !isDayCollapsed(key));
+  const tablesHtml = expandedKeys
+    .map((key) => renderDayTable(key, state.days[key]))
+    .join("");
+  const daysHtml = tablesHtml
+    ? `<div class="log-week-days">${tablesHtml}</div>`
+    : "";
+
+  const heading = weekHeading(weekStartKey);
+  const weekIndex = String(heading.weekNum).padStart(2, "0");
+
+  return `
+    <section class="log-week" data-week="${weekStartKey}">
+      <h2 class="log-week-label">
+        <span class="log-week-month">${escapeHtml(heading.month)}</span>
+        <span class="log-week-index">W${weekIndex}</span>
+      </h2>
+      <div class="log-week-dates${positioned ? " is-positioned" : " is-packed"}">${dateCells}</div>
+      ${daysHtml}
+    </section>
+  `;
+}
+
 function renderRows() {
   syncActiveDay();
   hideTimestampPopup();
@@ -2110,7 +2254,7 @@ function renderRows() {
   }
 
   logEl.hidden = false;
-  logEl.innerHTML = dayKeys.map((key) => renderDayTable(key, state.days[key])).join("");
+  logEl.innerHTML = groupDayKeysIntoWeeks(dayKeys).map(renderWeek).join("");
 
   bindDurationInteractions();
   bindDayHeaderControls();
