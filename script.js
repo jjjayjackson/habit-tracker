@@ -238,12 +238,32 @@ function groupDayKeysIntoWeeks(dayKeys) {
   return weeks;
 }
 
+/** Thursday of the ISO week decides the week-year (ISO 8601). */
+function isoWeekData(date) {
+  const thursday = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const mondayOffsetDays = (thursday.getDay() + 6) % 7;
+  thursday.setDate(thursday.getDate() - mondayOffsetDays + 3);
+  const isoYear = thursday.getFullYear();
+  const jan4 = new Date(isoYear, 0, 4);
+  const week1Thursday = new Date(isoYear, 0, 4);
+  week1Thursday.setDate(jan4.getDate() - ((jan4.getDay() + 6) % 7) + 3);
+  const weekNum = 1 + Math.round((thursday - week1Thursday) / 604800000);
+  return { isoYear, weekNum };
+}
+
+function isoWeeksInYear(year) {
+  return isoWeekData(new Date(year, 11, 28)).weekNum;
+}
+
 /** Thursday decides the month, matching ISO’s week-year rule. */
 function weekHeading(weekStartKey) {
   const thursday = dateFromDayKey(shiftDayKey(weekStartKey, 3));
+  const { isoYear, weekNum: yearWeek } = isoWeekData(thursday);
   return {
     month: MONTH_NAMES[thursday.getMonth()],
     weekNum: Math.ceil(thursday.getDate() / 7),
+    yearWeek,
+    yearWeeks: isoWeeksInYear(isoYear),
   };
 }
 
@@ -1753,6 +1773,45 @@ function deleteEntry(dayKey, rowIndex, entryIndex) {
   renderRows();
 }
 
+function removeEmptyDayIfNeeded(dayKey) {
+  const rows = state.days[dayKey];
+  if (rows && rows.length > 0) return;
+  delete state.days[dayKey];
+  if (state.collapsedDays.delete(dayKey)) saveCollapsedDays();
+}
+
+function moveEntryToPreviousDay(dayKey, rowIndex, entryIndex) {
+  const rows = state.days[dayKey];
+  if (!rows) return;
+  const row = rows[rowIndex];
+  if (!row || !Array.isArray(row.durations)) return;
+  const entry = row.durations[entryIndex];
+  if (!entry) return;
+
+  const prevKey = shiftDayKey(dayKey, -1);
+  if (noteEditingKey) clearNoteEditorState();
+
+  row.durations.splice(entryIndex, 1);
+  if (row.durations.length === 0) {
+    rows.splice(rowIndex, 1);
+  }
+  removeEmptyDayIfNeeded(dayKey);
+
+  const prevRows = rowsFor(prevKey);
+  const index = findRowIndex(prevKey, row.category);
+  if (index === -1) {
+    prevRows.push({
+      id: crypto.randomUUID(),
+      category: row.category,
+      durations: [entry],
+    });
+  } else {
+    prevRows[index].durations.push(entry);
+  }
+
+  renderRows();
+}
+
 function createMenuButton(label, { danger = false, onClick } = {}) {
   const btn = document.createElement("button");
   btn.type = "button";
@@ -1840,6 +1899,23 @@ function openDurationMenu(dayKey, rowIndex, entryIndex, clientX, clientY, mode) 
       createMenuButton("Edit", {
         onClick: () => openNoteEditor(dayKey, rowIndex, entryIndex),
       }),
+    );
+  } else {
+    menu.append(
+      createMenuButton("Note", {
+        onClick: () => openNoteEditor(dayKey, rowIndex, entryIndex),
+      }),
+    );
+  }
+
+  menu.append(
+    createMenuButton("Move to previous day", {
+      onClick: () => moveEntryToPreviousDay(dayKey, rowIndex, entryIndex),
+    }),
+  );
+
+  if (mode === "context" && hasComment) {
+    menu.append(
       createMenuButton("Delete note", {
         danger: true,
         onClick: () => deleteEntryComment(dayKey, rowIndex, entryIndex),
@@ -1847,9 +1923,6 @@ function openDurationMenu(dayKey, rowIndex, entryIndex, clientX, clientY, mode) 
     );
   } else {
     menu.append(
-      createMenuButton("Note", {
-        onClick: () => openNoteEditor(dayKey, rowIndex, entryIndex),
-      }),
       createMenuButton("Delete", {
         danger: true,
         onClick: () => deleteEntry(dayKey, rowIndex, entryIndex),
@@ -2226,12 +2299,15 @@ function renderWeek(weekStartKey) {
 
   const heading = weekHeading(weekStartKey);
   const weekIndex = String(heading.weekNum).padStart(2, "0");
+  const yearWeek = String(heading.yearWeek).padStart(2, "0");
+  const yearWeeks = String(heading.yearWeeks);
 
   return `
     <section class="log-week" data-week="${weekStartKey}">
       <h2 class="log-week-label">
         <span class="log-week-month">${escapeHtml(heading.month)}</span>
         <span class="log-week-index">W${weekIndex}</span>
+        <span class="log-week-index" aria-label="Week ${heading.yearWeek} of ${heading.yearWeeks}">${yearWeek}/${yearWeeks}</span>
       </h2>
       <div class="log-week-dates${positioned ? " is-positioned" : " is-packed"}">${dateCells}</div>
       ${daysHtml}
@@ -2610,7 +2686,7 @@ const TRANSFER_MENU_GAP_PX = 6;
 /** Keep the menu a little inside the window edges. */
 const TRANSFER_MENU_EDGE_PAD_PX = 8;
 
-/** @type {{ id: number, name: string, elapsedMs: number, running: boolean, startedAt: number|null, intervalId: number|null, root: HTMLElement }[]} */
+/** @type {{ id: number, name: string, elapsedMs: number, running: boolean, startedAt: number|null, sessionStartedAt: number|null, intervalId: number|null, root: HTMLElement }[]} */
 let stopwatches = [];
 
 /** Pending time adjust: positive = add, negative = subtract (ms). null = picker hidden. */
@@ -2948,12 +3024,15 @@ function createStopwatchElement(id) {
         ×
       </button>
     </div>
-    <div class="stopwatch-display" aria-live="polite">
-      <span class="stopwatch-hours">00</span>
-      <span class="stopwatch-sep" aria-hidden="true">:</span>
-      <span class="stopwatch-minutes">00</span>
-      <span class="stopwatch-sep" aria-hidden="true">:</span>
-      <span class="stopwatch-seconds">00</span>
+    <div class="stopwatch-face">
+      <div class="stopwatch-started-at" data-started-at hidden></div>
+      <div class="stopwatch-display" aria-live="polite">
+        <span class="stopwatch-hours">00</span>
+        <span class="stopwatch-sep" aria-hidden="true">:</span>
+        <span class="stopwatch-minutes">00</span>
+        <span class="stopwatch-sep" aria-hidden="true">:</span>
+        <span class="stopwatch-seconds">00</span>
+      </div>
     </div>
     <div class="stopwatch-actions">
       <button type="button" class="stopwatch-btn" data-action="toggle">Start</button>
@@ -3149,6 +3228,7 @@ function createStopwatch(initial = {}) {
     elapsedMs: Number(initial.elapsedMs) > 0 ? Number(initial.elapsedMs) : 0,
     running: false,
     startedAt: null,
+    sessionStartedAt: null,
     intervalId: null,
     root,
   };
@@ -3164,6 +3244,8 @@ function createStopwatch(initial = {}) {
     sw.startedAt = startedAt;
     tickStopwatch(sw);
   }
+
+  sw.sessionStartedAt = resolveSessionStartedAt(initial);
 
   renderStopwatch(sw);
   syncStopwatchManageButtons();
@@ -3314,12 +3396,32 @@ function writeStopwatchesLocal(payload) {
   localStorage.setItem(STOPWATCHES_STORAGE_KEY, JSON.stringify(payload));
 }
 
+function resolveSessionStartedAt(entry) {
+  const saved = Number(entry?.sessionStartedAt);
+  if (Number.isFinite(saved) && saved > 0) return saved;
+  if (entry?.running === true && !(Number(entry?.elapsedMs) > 0)) {
+    const startedAt = Number(entry?.startedAt);
+    if (Number.isFinite(startedAt) && startedAt > 0) return startedAt;
+  }
+  return null;
+}
+
+function formatStopwatchStartedAt(ms) {
+  const date = new Date(ms);
+  if (Number.isNaN(date.getTime())) return "";
+  const hours = pad2(date.getHours());
+  const minutes = pad2(date.getMinutes());
+  const seconds = pad2(date.getSeconds());
+  return `${formatDate(date)} ${hours}:${minutes}:${seconds}`;
+}
+
 function stopwatchesPayload() {
   return stopwatches.map((sw) => ({
     name: normalizeStopwatchName(sw.name),
     elapsedMs: sw.elapsedMs,
     running: sw.running,
     startedAt: sw.running ? sw.startedAt : null,
+    sessionStartedAt: sw.sessionStartedAt,
   }));
 }
 
@@ -3350,6 +3452,7 @@ function loadStopwatchesFromLocal() {
       running: entry?.running === true,
       startedAt:
         entry?.startedAt == null ? null : Number(entry.startedAt),
+      sessionStartedAt: resolveSessionStartedAt(entry),
     }));
   } catch {
     return null;
@@ -3379,15 +3482,20 @@ async function loadStopwatchesFromSupabase() {
     elapsedMs: 0,
     running: false,
     startedAt: null,
+    sessionStartedAt: null,
   }));
   for (const row of data) {
     const id = Number(row.id);
     if (!Number.isInteger(id) || id < 0) continue;
-    payload[id] = {
+    const entry = {
       name: normalizeStopwatchName(row.name),
       elapsedMs: Number(row.elapsed_ms) || 0,
       running: row.running === true,
       startedAt: row.started_at == null ? null : Number(row.started_at),
+    };
+    payload[id] = {
+      ...entry,
+      sessionStartedAt: resolveSessionStartedAt(entry),
     };
   }
   return payload;
@@ -3405,6 +3513,9 @@ async function loadStopwatches() {
         return {
           ...entry,
           name: remoteName || localName,
+          sessionStartedAt:
+            resolveSessionStartedAt(local?.[index]) ??
+            resolveSessionStartedAt(entry),
         };
       });
       writeStopwatchesLocal(merged);
@@ -3492,6 +3603,17 @@ function renderStopwatch(sw) {
     toggleBtn.textContent = sw.running ? "Stop" : "Start";
     toggleBtn.classList.toggle("is-running", sw.running);
   }
+  const startedEl = sw.root.querySelector("[data-started-at]");
+  if (startedEl) {
+    const startedAt = Number(sw.sessionStartedAt);
+    if (Number.isFinite(startedAt) && startedAt > 0) {
+      startedEl.hidden = false;
+      startedEl.textContent = `Started at ${formatStopwatchStartedAt(startedAt)}`;
+    } else {
+      startedEl.hidden = true;
+      startedEl.textContent = "";
+    }
+  }
   updateDocumentTitleFromStopwatches();
 }
 
@@ -3499,6 +3621,7 @@ function startStopwatch(sw) {
   if (sw.running) return;
   sw.running = true;
   sw.startedAt = Date.now();
+  if (sw.sessionStartedAt == null) sw.sessionStartedAt = sw.startedAt;
   tickStopwatch(sw);
   renderStopwatch(sw);
   saveStopwatches();
@@ -3520,6 +3643,7 @@ function stopStopwatch(sw) {
 function resetStopwatch(sw) {
   stopStopwatch(sw);
   sw.elapsedMs = 0;
+  sw.sessionStartedAt = null;
   renderStopwatch(sw);
   saveStopwatches();
 }

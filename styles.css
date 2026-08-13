@@ -125,12 +125,10 @@ body {
 
 .log-week-date-cell.is-collapsed .day-date-btn {
   color: var(--muted);
-  font-weight: 400;
 }
 
 .log-week-date-cell.is-expanded .day-date-btn {
   color: var(--fg);
-  font-weight: 400;
 }
 
 .log-week-date-cell.is-expanded .day-date-btn::before,
@@ -1106,6 +1104,28 @@ body {
 .stopwatch-name-clear:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
+}
+
+.stopwatch-started-at {
+  max-width: 100%;
+  color: var(--muted);
+  font-size: 0.62rem;
+  letter-spacing: 0.02em;
+  line-height: 1.25;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.stopwatch-started-at[hidden] {
+  display: none;
+}
+
+.stopwatch-face {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.28rem;
+  width: 100%;
 }
 
 .stopwatch-display {
