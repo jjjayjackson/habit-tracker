@@ -25,6 +25,10 @@ const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const NEXT_BOOK_OPEN_THRESHOLD = 0.8;
 const PERSIST_DEBOUNCE_MS = 400;
 
+if ("scrollRestoration" in history) {
+  history.scrollRestoration = "manual";
+}
+
 const supabase = window.supabase.createClient(
   window.HABIT_SUPABASE.url,
   window.HABIT_SUPABASE.anonKey,
@@ -90,7 +94,6 @@ const transferNoteSummary = document.getElementById("transfer-note-summary");
 const transferNoteInput = document.getElementById("transfer-note-input");
 const transferNoteSkipBtn = document.getElementById("transfer-note-skip");
 const transferNoteCancelBtn = document.getElementById("transfer-note-cancel");
-const transferNoteWarning = document.getElementById("transfer-note-warning");
 
 let timestampPopupEl = null;
 let contextMenuEl = null;
@@ -103,7 +106,7 @@ let dateEditingKey = null; // "YYYY-MM-DD"
 let dateDraft = "";
 let dateEditorDiscarding = false;
 let activeDayKey = null;
-/** Pending stopwatch transfer waiting on the note dialog. */
+/** Pending transfer waiting on the note dialog (stopwatch or bottom bar). */
 let pendingTransfer = null;
 
 function formatDate(date) {
@@ -2157,11 +2160,65 @@ function bindDurationInteractions() {
   });
 }
 
+/** Make sure the bottom bar is ready to log (especially Reading pages). */
+function validateComposerCommit(categoryId) {
+  if (!categoryById(categoryId)) return false;
+  if (categoryId !== READING_CATEGORY_ID) return true;
+
+  const book = getActiveBook();
+  if (!book) {
+    categorySelect.value = READING_CATEGORY_ID;
+    updateComposerMode();
+    openBookDialog("new");
+    return false;
+  }
+
+  const pageFrom = parsePageNumber(pageFromInput.value);
+  const pageTo = parsePageNumber(pageToInput.value);
+
+  if (pageFrom === null) {
+    categorySelect.value = READING_CATEGORY_ID;
+    updateComposerMode();
+    pageFromInput.setCustomValidity("Enter a start page");
+    pageFromInput.reportValidity();
+    return false;
+  }
+
+  if (pageTo === null) {
+    categorySelect.value = READING_CATEGORY_ID;
+    updateComposerMode();
+    pageToInput.setCustomValidity("Enter an end page");
+    pageToInput.reportValidity();
+    return false;
+  }
+
+  if (pageFrom > pageTo) {
+    categorySelect.value = READING_CATEGORY_ID;
+    updateComposerMode();
+    pageToInput.setCustomValidity("End page must be ≥ start");
+    pageToInput.reportValidity();
+    return false;
+  }
+
+  if (pageTo > book.totalPages || pageFrom > book.totalPages) {
+    categorySelect.value = READING_CATEGORY_ID;
+    updateComposerMode();
+    pageToInput.setCustomValidity(`Book only has ${book.totalPages} pages`);
+    pageToInput.reportValidity();
+    return false;
+  }
+
+  pageToInput.setCustomValidity("");
+  pageFromInput.setCustomValidity("");
+  return true;
+}
+
 function commitDuration(categoryId, totalSeconds, comment = "") {
   const category = categoryById(categoryId);
   if (!category || !Number.isFinite(totalSeconds) || totalSeconds < 1) {
     return false;
   }
+  if (!validateComposerCommit(categoryId)) return false;
 
   const seconds = Math.floor(totalSeconds);
   const minutes = Math.floor(seconds / 60);
@@ -2170,50 +2227,8 @@ function commitDuration(categoryId, totalSeconds, comment = "") {
 
   if (categoryId === READING_CATEGORY_ID) {
     const book = getActiveBook();
-    if (!book) {
-      categorySelect.value = READING_CATEGORY_ID;
-      updateComposerMode();
-      openBookDialog("new");
-      return false;
-    }
-
     const pageFrom = parsePageNumber(pageFromInput.value);
     const pageTo = parsePageNumber(pageToInput.value);
-
-    if (pageFrom === null) {
-      categorySelect.value = READING_CATEGORY_ID;
-      updateComposerMode();
-      pageFromInput.setCustomValidity("Enter a start page");
-      pageFromInput.reportValidity();
-      return false;
-    }
-
-    if (pageTo === null) {
-      categorySelect.value = READING_CATEGORY_ID;
-      updateComposerMode();
-      pageToInput.setCustomValidity("Enter an end page");
-      pageToInput.reportValidity();
-      return false;
-    }
-
-    if (pageFrom > pageTo) {
-      categorySelect.value = READING_CATEGORY_ID;
-      updateComposerMode();
-      pageToInput.setCustomValidity("End page must be ≥ start");
-      pageToInput.reportValidity();
-      return false;
-    }
-
-    if (pageTo > book.totalPages || pageFrom > book.totalPages) {
-      categorySelect.value = READING_CATEGORY_ID;
-      updateComposerMode();
-      pageToInput.setCustomValidity(`Book only has ${book.totalPages} pages`);
-      pageToInput.reportValidity();
-      return false;
-    }
-
-    pageToInput.setCustomValidity("");
-    pageFromInput.setCustomValidity("");
 
     const readingEntry = {
       minutes,
@@ -2265,10 +2280,10 @@ function onSubmit(event) {
   }
   durationInput.setCustomValidity("");
 
-  if (!commitDuration(categoryId, seconds)) return;
+  if (!validateComposerCommit(categoryId)) return;
 
-  durationInput.value = "";
-  durationInput.focus();
+  // Same note popup as stopwatch Transfer after picking a category.
+  openTransferNoteDialog(categoryId, seconds);
 }
 
 function onCategoryChange() {
@@ -2446,6 +2461,10 @@ const categoryDeleteBtn = document.getElementById("category-delete-btn");
 const MIN_STOPWATCHES = 1;
 const MAX_STOPWATCHES = 4;
 const MAX_STOPWATCH_NAME_LENGTH = 40;
+/** Gap between the Transfer button and its menu (~0.35rem). */
+const TRANSFER_MENU_GAP_PX = 6;
+/** Keep the menu a little inside the window edges. */
+const TRANSFER_MENU_EDGE_PAD_PX = 8;
 
 /** @type {{ id: number, name: string, elapsedMs: number, running: boolean, startedAt: number|null, intervalId: number|null, root: HTMLElement }[]} */
 let stopwatches = [];
@@ -3361,12 +3380,75 @@ function resetStopwatch(sw) {
   saveStopwatches();
 }
 
+function resetTransferMenuPosition(menu) {
+  if (!menu) return;
+  menu.classList.remove("is-dropup");
+  menu.style.position = "";
+  menu.style.top = "";
+  menu.style.bottom = "";
+  menu.style.left = "";
+  menu.style.right = "";
+  menu.style.width = "";
+  menu.style.maxHeight = "";
+}
+
+/**
+ * Place the transfer menu below the button when it fits, otherwise above.
+ * Uses position:fixed so overflow on the side panel can't clip it.
+ */
+function positionTransferMenu(sw) {
+  const menu = sw.root?.querySelector(".stopwatch-transfer-menu");
+  const btn = sw.root?.querySelector('[data-action="transfer"]');
+  if (!menu || !btn || menu.hidden) return;
+
+  resetTransferMenuPosition(menu);
+
+  const btnRect = btn.getBoundingClientRect();
+  const needed = menu.scrollHeight;
+  const gap = TRANSFER_MENU_GAP_PX;
+  const pad = TRANSFER_MENU_EDGE_PAD_PX;
+  const spaceBelow = window.innerHeight - pad - (btnRect.bottom + gap);
+  const spaceAbove = btnRect.top - gap - pad;
+
+  // Default downward. Flip up only when there isn't enough room below.
+  let openDown = spaceBelow >= needed;
+  if (!openDown && spaceAbove < needed) {
+    openDown = spaceBelow >= spaceAbove;
+  }
+
+  const available = Math.max(openDown ? spaceBelow : spaceAbove, 72);
+  menu.classList.toggle("is-dropup", !openDown);
+  menu.style.position = "fixed";
+  menu.style.left = `${Math.round(btnRect.left)}px`;
+  menu.style.width = `${Math.round(btnRect.width)}px`;
+  menu.style.right = "auto";
+  menu.style.maxHeight = `${Math.round(available)}px`;
+
+  if (openDown) {
+    menu.style.top = `${Math.round(btnRect.bottom + gap)}px`;
+    menu.style.bottom = "auto";
+  } else {
+    menu.style.top = "auto";
+    menu.style.bottom = `${Math.round(window.innerHeight - btnRect.top + gap)}px`;
+  }
+}
+
+function repositionOpenTransferMenus() {
+  for (const sw of stopwatches) {
+    const menu = sw.root?.querySelector(".stopwatch-transfer-menu");
+    if (menu && !menu.hidden) positionTransferMenu(sw);
+  }
+}
+
 function closeTransferMenus(exceptRoot = null) {
   for (const sw of stopwatches) {
     if (!sw.root || sw.root === exceptRoot) continue;
     const menu = sw.root.querySelector(".stopwatch-transfer-menu");
     const btn = sw.root.querySelector('[data-action="transfer"]');
-    if (menu) menu.hidden = true;
+    if (menu) {
+      menu.hidden = true;
+      resetTransferMenuPosition(menu);
+    }
     if (btn) btn.setAttribute("aria-expanded", "false");
   }
 }
@@ -3490,7 +3572,7 @@ function completeReadingTransfer(sw) {
   updateComposerMode();
 
   closeTransferMenus();
-  openTransferNoteDialog(sw, READING_CATEGORY_ID, seconds);
+  openTransferNoteDialog(READING_CATEGORY_ID, seconds, sw.id);
 }
 
 function toggleTransferMenu(sw) {
@@ -3502,6 +3584,8 @@ function toggleTransferMenu(sw) {
   if (nextOpen) hideStopwatchReadingFields();
   menu.hidden = !nextOpen;
   btn.setAttribute("aria-expanded", nextOpen ? "true" : "false");
+  if (nextOpen) positionTransferMenu(sw);
+  else resetTransferMenuPosition(menu);
 }
 
 function bindStopwatchReadingFields() {
@@ -3516,12 +3600,12 @@ function buildTransferMenus() {
   }
 }
 
-function openTransferNoteDialog(sw, categoryId, seconds) {
+function openTransferNoteDialog(categoryId, seconds, stopwatchId = null) {
   const category = categoryById(categoryId);
   if (!category || !Number.isFinite(seconds) || seconds < 1) return;
 
   pendingTransfer = {
-    stopwatchId: sw.id,
+    stopwatchId: stopwatchId == null ? null : stopwatchId,
     categoryId,
     seconds,
   };
@@ -3533,7 +3617,6 @@ function openTransferNoteDialog(sw, categoryId, seconds) {
 
   transferNoteInput.value = "";
   transferNoteSummary.textContent = `${formatLoggedDuration(seconds)} → ${category.name}`;
-  hideTransferNoteWarning();
 
   if (typeof transferNoteDialog.showModal === "function") {
     transferNoteDialog.showModal();
@@ -3552,19 +3635,6 @@ function closeTransferNoteDialog() {
   } else {
     transferNoteDialog.removeAttribute("open");
   }
-  hideTransferNoteWarning();
-}
-
-function showTransferNoteWarning() {
-  transferNoteWarning.hidden = false;
-}
-
-function hideTransferNoteWarning() {
-  transferNoteWarning.hidden = true;
-}
-
-function isTransferNoteWarningVisible() {
-  return !transferNoteWarning.hidden;
 }
 
 /** Finish a pending transfer, with or without a note. */
@@ -3572,25 +3642,29 @@ function finishPendingTransfer(comment = "") {
   if (!pendingTransfer) return;
 
   const { stopwatchId, categoryId, seconds } = pendingTransfer;
+  const fromComposer = stopwatchId == null;
   pendingTransfer = null;
   closeTransferNoteDialog();
 
-  commitDuration(categoryId, seconds, comment);
+  const committed = commitDuration(categoryId, seconds, comment);
+  if (committed && fromComposer) {
+    durationInput.value = "";
+    durationInput.focus();
+  }
 
-  const sw = stopwatches.find((item) => item.id === stopwatchId);
+  const sw =
+    stopwatchId == null
+      ? null
+      : stopwatches.find((item) => item.id === stopwatchId);
   if (sw) {
     resetStopwatch(sw);
   }
   closeTransferMenus();
 }
 
-/** First Cancel/Esc shows a warning; second confirms the abort. */
+/** Cancel / Esc aborts the transfer without logging time. */
 function requestTransferAbort() {
   if (!pendingTransfer) return;
-  if (!isTransferNoteWarningVisible()) {
-    showTransferNoteWarning();
-    return;
-  }
   pendingTransfer = null;
   closeTransferNoteDialog();
   closeTransferMenus();
@@ -3610,7 +3684,6 @@ function onTransferNoteCancelClick() {
 }
 
 function onTransferNoteDialogCancel(event) {
-  // Escape: warn first, abort on second press. Keep dialog open until confirmed.
   event.preventDefault();
   requestTransferAbort();
 }
@@ -3665,7 +3738,7 @@ function transferStopwatch(sw, categoryId) {
   }
 
   closeTransferMenus();
-  openTransferNoteDialog(sw, categoryId, seconds);
+  openTransferNoteDialog(categoryId, seconds, sw.id);
 }
 
 function onStopwatchPageFromInput(event) {
@@ -3790,10 +3863,20 @@ if (timersPanel) {
 }
 
 document.addEventListener("click", (event) => {
-  if (event.target.closest(".stopwatch-transfer")) return;
-  if (event.target.closest("#panel-timers")) return;
+  // Keep the menu open only for the Transfer button and its options.
+  // Clicks anywhere else (main editor, empty panel space, other controls)
+  // cancel the transfer without touching the stopwatch time.
+  if (event.target.closest(".stopwatch-transfer-menu")) return;
+  if (event.target.closest('[data-action="transfer"]')) return;
   closeTransferMenus();
 });
+
+if (stopwatchListEl) {
+  stopwatchListEl.addEventListener("scroll", repositionOpenTransferMenus, {
+    passive: true,
+  });
+}
+window.addEventListener("resize", repositionOpenTransferMenus);
 
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
@@ -3977,6 +4060,18 @@ async function boot() {
   // Rebuild transfer menus after categories (and stopwatches) are ready.
   buildTransferMenus();
   durationInput.focus();
+  requestAnimationFrame(() => {
+    scrollToPageBottom();
+    requestAnimationFrame(scrollToPageBottom);
+  });
+}
+
+function scrollToPageBottom() {
+  const top = Math.max(
+    document.documentElement.scrollHeight,
+    document.body.scrollHeight,
+  );
+  window.scrollTo(0, top);
 }
 
 window.addEventListener("beforeunload", () => {

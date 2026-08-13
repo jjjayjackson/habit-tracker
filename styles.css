@@ -678,10 +678,6 @@ body {
   line-height: 1.35;
 }
 
-.transfer-note-warning[hidden] {
-  display: none;
-}
-
 /* —— Permanent right-side tool rail —— */
 .side-rail {
   position: fixed;
@@ -1160,14 +1156,23 @@ body {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: calc(100% + 0.35rem);
+  top: calc(100% + 0.35rem);
+  bottom: auto;
   z-index: 50;
   width: 100%;
+  max-height: min(16rem, calc(100vh - 1rem));
   padding: 0.3rem;
+  overflow-x: hidden;
+  overflow-y: auto;
   border: 1px solid var(--composer-border);
   border-radius: 0.5rem;
   background: #141414;
   box-shadow: -4px 6px 24px rgba(0, 0, 0, 0.45);
+}
+
+.stopwatch-transfer-menu.is-dropup {
+  top: auto;
+  bottom: calc(100% + 0.35rem);
 }
 
 .stopwatch-transfer-option {
